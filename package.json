@@ -1,0 +1,59 @@
+{
+  "name": "@zibby/agent-workflow",
+  "version": "0.1.4",
+  "description": "Graph-based AI agent workflow orchestration. Bring your own agent strategies.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "ai",
+    "workflow",
+    "graph",
+    "agents",
+    "orchestration",
+    "langgraph"
+  ],
+  "author": "Zibby",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "dotenv": "^17.0.0",
+    "handlebars": "^4.7.9",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "peerDependencies": {
+    "zod": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4",
+    "zod": "^4.3.6"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && tsc",
+    "build:js": "node scripts/build.mjs",
+    "build:types": "tsc",
+    "test": "vitest run --passWithNoTests"
+  }
+}

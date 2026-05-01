@@ -1,0 +1,28 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+
+# Test / runtime artifacts
+coverage/
+.zibby/
+test-results/
+
+# Examples — locally installed deps
+examples/*/node_modules/
+examples/*/package-lock.json
+examples/*/.zibby/
