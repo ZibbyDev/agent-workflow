@@ -21,6 +21,7 @@ import {
   SESSIONS_DIR,
   SESSION_INFO_FILE,
   CI_ENV_VARS,
+  STOP_REQUEST_FILE,
   STUDIO_STOP_REQUEST_FILE,
 } from './constants.js';
 import { timeline } from './timeline.js';
@@ -61,25 +62,42 @@ function logWorkflowSessionResolution({
 }
 
 /**
- * Studio spawns `zibby run` with ZIBBY_SESSION_* already set — do not strip.
- * Set ZIBBY_KEEP_SESSION_ENV=1 to allow inherited session env for advanced CLI use.
+ * Returns true when the host process has spawned this workflow with
+ * ZIBBY_SESSION_* env vars that should be preserved (not cleared by
+ * `clearInheritedSessionEnvForFreshRun`). True when ANY of:
+ *   - `ZIBBY_TRUST_SESSION_ENV=1`  (canonical, consumer-agnostic)
+ *   - `ZIBBY_KEEP_SESSION_ENV=1`   (legacy CLI-side opt-in)
+ *   - `ZIBBY_RUN_SOURCE=studio`    (legacy Studio-specific; deprecated)
  */
 export function shouldTrustInheritedSessionEnv() {
   return (
-    process.env.ZIBBY_RUN_SOURCE === 'studio' ||
+    process.env.ZIBBY_TRUST_SESSION_ENV === '1' ||
+    process.env.ZIBBY_TRUST_SESSION_ENV === 'true' ||
     process.env.ZIBBY_KEEP_SESSION_ENV === '1' ||
-    process.env.ZIBBY_KEEP_SESSION_ENV === 'true'
+    process.env.ZIBBY_KEEP_SESSION_ENV === 'true' ||
+    // @deprecated — Studio-specific check kept for one release. Studio should
+    // migrate to ZIBBY_TRUST_SESSION_ENV=1.
+    process.env.ZIBBY_RUN_SOURCE === 'studio'
   );
 }
 
 /**
- * Studio sets `ZIBBY_RUN_SOURCE=studio` and `ZIBBY_SESSION_PATH` before spawning `zibby run`.
- * Snapshot this path *before* `clearInheritedSessionEnvForFreshRun()` so we still pin the folder when:
- * - an older global `@zibby/core` clears session env unconditionally, or
- * - `--session-path` is dropped by shell/argv quirks but env was set.
+ * If the host has pinned a specific session folder via env (e.g. a desktop
+ * app spawning the CLI with ZIBBY_SESSION_PATH already set), return its
+ * resolved absolute path. Returns undefined when the host hasn't pinned one.
+ *
+ * Gated on `ZIBBY_PIN_SESSION_PATH=1` (canonical) OR the legacy
+ * `ZIBBY_RUN_SOURCE=studio` (deprecated) so an unrelated process that
+ * happens to have ZIBBY_SESSION_PATH in its environment doesn't accidentally
+ * land in someone else's session folder.
  */
-export function readStudioPinnedSessionPathFromEnv() {
-  if (process.env.ZIBBY_RUN_SOURCE !== 'studio') return undefined;
+export function readPinnedSessionPathFromEnv() {
+  const pinned =
+    process.env.ZIBBY_PIN_SESSION_PATH === '1' ||
+    process.env.ZIBBY_PIN_SESSION_PATH === 'true' ||
+    // @deprecated — kept for one release.
+    process.env.ZIBBY_RUN_SOURCE === 'studio';
+  if (!pinned) return undefined;
   const raw = process.env.ZIBBY_SESSION_PATH;
   if (raw == null || String(raw).trim() === '') return undefined;
   try {
@@ -88,6 +106,13 @@ export function readStudioPinnedSessionPathFromEnv() {
     return String(raw).trim();
   }
 }
+
+/**
+ * @deprecated Use `readPinnedSessionPathFromEnv`. Same behavior; the rename
+ * is part of the AbortSignal-contract migration so the engine stops naming
+ * a specific consumer (Studio) in its public API.
+ */
+export const readStudioPinnedSessionPathFromEnv = readPinnedSessionPathFromEnv;
 
 /** Drop stale shell exports so graph + children do not write to an old session folder. */
 export function clearInheritedSessionEnvForFreshRun() {
@@ -534,17 +559,25 @@ export class WorkflowGraph {
         );
       }
 
-      const studioStopPath = join(sessionPath, STUDIO_STOP_REQUEST_FILE);
-      if (existsSync(studioStopPath)) {
-        console.warn('\n🛑 Studio stop requested — ending workflow.');
-        try { unlinkSync(studioStopPath); } catch { /* ignore */ }
+      // Check both the generic stop-file (new contract) and the legacy
+      // Studio-specific name (deprecated, kept until consumers migrate).
+      // Whichever appears first wins; we unlink whichever existed.
+      const stopPath = join(sessionPath, STOP_REQUEST_FILE);
+      const legacyStopPath = join(sessionPath, STUDIO_STOP_REQUEST_FILE);
+      const stopFileExists = existsSync(stopPath);
+      const legacyStopExists = existsSync(legacyStopPath);
+      if (stopFileExists || legacyStopExists) {
+        console.warn('\n🛑 External stop requested — ending workflow.');
+        if (stopFileExists)   { try { unlinkSync(stopPath);       } catch { /* ignore */ } }
+        if (legacyStopExists) { try { unlinkSync(legacyStopPath); } catch { /* ignore */ } }
         // cleanup() runs in the outer finally — no need to call it here.
-        timeline.step('Workflow stopped by Studio');
+        timeline.step('Workflow stopped externally');
         return {
           success: true,
           state: state.getAll(),
           executionLog,
-          stoppedByStudio: true,
+          stoppedExternally: true,   // canonical contract going forward
+          stoppedByStudio: true,     // @deprecated — kept for one release
         };
       }
 
@@ -666,16 +699,20 @@ export class WorkflowGraph {
 
         if (!result.success) {
           const errMsg = String(result.error || '');
-          // Studio uses this exact phrase to signal a graceful stop from the UI.
+          // Legacy: Studio used this exact error phrase to signal a graceful
+          // stop from the UI. Kept for one release; new consumers should use
+          // the AbortSignal contract (graph.run({ signal })) once that lands.
           if (errMsg.includes('Stopped from Zibby Studio')) {
-            timeline.step('Workflow stopped by Studio');
-            state.set('stoppedByStudio', true);
+            timeline.step('Workflow stopped externally');
+            state.set('stoppedExternally', true);
+            state.set('stoppedByStudio', true);   // @deprecated mirror
             // cleanup() runs in the outer finally — no need to call it here.
             return {
               success: true,
               state: state.getAll(),
               executionLog,
-              stoppedByStudio: true,
+              stoppedExternally: true,
+              stoppedByStudio: true,             // @deprecated — kept for one release
             };
           }
 

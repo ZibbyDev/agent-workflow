@@ -96,10 +96,16 @@ class Timeline {
     this._currentNode = null;
     this._origStdoutWrite = null;
     this._origStderrWrite = null;
-    const runSource = String(process.env.ZIBBY_RUN_SOURCE || '').trim().toLowerCase();
-    const forceMarkers = String(process.env.ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS || '').trim() === '1';
-    // Keep machine-readable markers for Studio log bucketing, hide them for normal CLI runs.
-    this._emitWorkflowGraphMarkers = forceMarkers || runSource === 'studio';
+    // Machine-readable node-lifecycle markers (consumed by Studio's run UI
+    // and the test runner). Off by default so plain CLI runs stay clean;
+    // any consumer that needs them sets one of the opt-in env vars.
+    const emitMarkers =
+      String(process.env.ZIBBY_EMIT_GRAPH_MARKERS || '').trim() === '1' ||      // canonical
+      String(process.env.ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS || '').trim() === '1' || // legacy explicit force
+      // @deprecated — Studio-specific gate kept for one release. Studio
+      // should migrate to ZIBBY_EMIT_GRAPH_MARKERS=1.
+      String(process.env.ZIBBY_RUN_SOURCE || '').trim().toLowerCase() === 'studio';
+    this._emitWorkflowGraphMarkers = emitMarkers;
   }
 
   get isInsideNode() {
