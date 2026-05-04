@@ -7,7 +7,7 @@
 
 📖 **Full docs:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **Run agents inside a workflow.** Graph-based JavaScript engine for orchestrating real coding agents — Claude Code, Cursor, Codex, Gemini, OpenAI Assistants — with structured I/O between nodes.
+> **The cloud pipeline for Claude Code, Cursor, Codex, and Gemini.** Compose them into structured workflows with Zod-validated handoff between nodes. Vendor-neutral, JavaScript-first, runs locally or in our cloud.
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
@@ -28,6 +28,8 @@ graph
   .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
   .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
 ```
+
+Each agent reads its own credential env var (`ANTHROPIC_API_KEY`, `CURSOR_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** you can set those per-workflow — different keys per pipeline, no global state — see [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-node `model` overrides come from `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), which the CLI ships to cloud as part of the deploy bundle.
 
 ---
 
