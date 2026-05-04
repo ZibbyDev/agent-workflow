@@ -73,6 +73,26 @@ These are stable contracts consumed by external tooling — change only with a m
 
 Consumers: [Zibby Studio](https://github.com/ZibbyHQ/studio), `@zibby/skills`'s test-runner.
 
+## Known limitations
+
+These are known and tracked — please don't file duplicate issues, but PRs that move any of them forward are welcome.
+
+- **Stop signal latency for subprocess strategies.** `STUDIO_STOP_REQUEST_FILE` is checked between nodes, not during them. A long-running `cursor-agent` / `claude-code` invocation keeps running until the node finishes even after Stop is pressed. Proper fix is `AbortSignal` plumbed end-to-end through `strategy.invoke`, with each strategy killing its spawned child on abort.
+- **`state.js` snapshot is shallow.** `_history` snapshots use spread-copy; nested arrays/objects share references with the live state. Fine for sequential execution today; `rollback()` does not deep-restore nested mutations. Don't rely on it for nested state.
+- **`graph-compiler.js` uses `new Function()`** to compile node code from JSON graph configs. Safe when configs are user-authored. Do NOT pass untrusted graph configs from external sources without sandboxing.
+- **No recursion guard yet.** A conditional edge that routes back to itself runs until something else stops the process. Set a node `retries: N` cap or build a hop-count check into your routing function.
+
+## Before opening a PR
+
+A pre-flight checklist so reviewers don't bounce your work:
+
+- [ ] `npm test` passes locally
+- [ ] `npm run build` succeeds — catches JSDoc → `.d.ts` breakage early
+- [ ] New public API has a test in `src/__tests__/`
+- [ ] New public API has JSDoc (the `.d.ts` is generated from it; missing doc → missing types)
+- [ ] No `console.log` debugging slipped through (use `./logger.js`)
+- [ ] If you touched the public protocol surface (markers, env triggers, return keys), bump the major version and update consumers
+
 ## Reporting bugs / requesting features
 
 Open an issue using the templates in `.github/ISSUE_TEMPLATE/`. Include:
