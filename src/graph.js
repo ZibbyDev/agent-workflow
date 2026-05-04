@@ -423,8 +423,40 @@ export class WorkflowGraph {
     return details;
   }
 
-  async run(agent, initialState = {}) {
+  /**
+   * Execute the graph.
+   *
+   * @param {object}            agent          User-supplied agent shell (calculateOutputPath, onComplete, cleanup hooks).
+   * @param {object}            [initialState] Initial state values (cwd, input, config, sessionPath, etc.).
+   * @param {object}            [options]      Run-level options.
+   * @param {AbortSignal}       [options.signal] External abort signal. When aborted, the engine stops at the next
+   *                                             abort-checkpoint, returns `{ stoppedExternally: true }`, and runs cleanup.
+   *                                             The legacy stop-file watcher (`.zibby-stop` / `.zibby-studio-stop`) feeds
+   *                                             the same internal abort, so all stop paths converge to one return shape.
+   */
+  async run(agent, initialState = {}, options = {}) {
     if (!this.entryPoint) throw new Error('No entry point set for graph');
+
+    // ── Abort plumbing ──────────────────────────────────────────────────
+    // Single internal AbortController owned by this run. Two feeds:
+    //   1. options.signal (the public contract, slice 2 of decoupling)
+    //   2. The legacy stop-file watcher inside the run loop (slice 1 BC)
+    // strategy.invoke() receives only this internal signal — phase 3
+    // deletes the file-watcher feed, leaving options.signal as the sole
+    // path. Pre-aborted external signals are honoured: the loop exits
+    // before any node executes.
+    const internalAbortController = new AbortController();
+    if (options.signal) {
+      if (options.signal.aborted) {
+        internalAbortController.abort();
+      } else {
+        options.signal.addEventListener(
+          'abort',
+          () => internalAbortController.abort(),
+          { once: true },
+        );
+      }
+    }
 
     const cwd = initialState.cwd || process.cwd();
     loadDotenv({ path: join(cwd, '.env') });
@@ -517,6 +549,10 @@ export class WorkflowGraph {
       sessionTimestamp,
       context,
       resolvedTools: this.resolvedToolsMap || {},
+      // Custom-execute nodes (and slice 3 strategies, once they adopt) read
+      // _signal off state to know whether to bail early. Stable contract:
+      // an AbortSignal — never null when run() is invoked.
+      _signal: internalAbortController.signal,
     });
 
     // Resolve skill middleware: scan all nodes for unique skills,
@@ -559,17 +595,26 @@ export class WorkflowGraph {
         );
       }
 
-      // Check both the generic stop-file (new contract) and the legacy
-      // Studio-specific name (deprecated, kept until consumers migrate).
-      // Whichever appears first wins; we unlink whichever existed.
+      // Stop detection. Two feeds, one exit point:
+      //   - Legacy stop-file watcher (BC): if either filename appears in the
+      //     session folder, abort the internal controller and unlink.
+      //   - External AbortSignal (new): options.signal already forwarded to
+      //     internalAbortController via the listener above.
+      // After both feeds run, a single check on internalAbortController.signal
+      // .aborted is the exit gate — same return shape regardless of cause.
       const stopPath = join(sessionPath, STOP_REQUEST_FILE);
       const legacyStopPath = join(sessionPath, STUDIO_STOP_REQUEST_FILE);
-      const stopFileExists = existsSync(stopPath);
-      const legacyStopExists = existsSync(legacyStopPath);
-      if (stopFileExists || legacyStopExists) {
+      if (existsSync(stopPath)) {
+        try { unlinkSync(stopPath); } catch { /* ignore */ }
+        internalAbortController.abort();
+      }
+      if (existsSync(legacyStopPath)) {
+        try { unlinkSync(legacyStopPath); } catch { /* ignore */ }
+        internalAbortController.abort();
+      }
+
+      if (internalAbortController.signal.aborted) {
         console.warn('\n🛑 External stop requested — ending workflow.');
-        if (stopFileExists)   { try { unlinkSync(stopPath);       } catch { /* ignore */ } }
-        if (legacyStopExists) { try { unlinkSync(legacyStopPath); } catch { /* ignore */ } }
         // cleanup() runs in the outer finally — no need to call it here.
         timeline.step('Workflow stopped externally');
         return {
@@ -664,6 +709,10 @@ export class WorkflowGraph {
           workspace: state.get('workspace'),
           schema: options.schema,
           ...options,
+          // Engine wins on signal: a node may pass its own options through
+          // here, but the engine's abort lifecycle is the single source of
+          // truth. Strategies read this in slice 3 to plumb into spawn().
+          signal: internalAbortController.signal,
         });
       };
 
@@ -713,6 +762,23 @@ export class WorkflowGraph {
               executionLog,
               stoppedExternally: true,
               stoppedByStudio: true,             // @deprecated — kept for one release
+            };
+          }
+
+          // Abort-aware failure handling: if abort fired during this node
+          // (external signal OR stop-file), the failure is expected — strategies
+          // (slice 3) reject with AbortError when their spawned child gets
+          // SIGTERM, and custom-execute nodes can opt-in to bailing on
+          // state._signal.aborted. In either case, exit cleanly with the
+          // canonical stop shape rather than throwing as a hard failure.
+          if (internalAbortController.signal.aborted) {
+            timeline.step('Workflow stopped externally');
+            return {
+              success: true,
+              state: state.getAll(),
+              executionLog,
+              stoppedExternally: true,
+              stoppedByStudio: true,   // @deprecated mirror — kept for one release
             };
           }
 
