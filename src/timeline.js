@@ -99,13 +99,30 @@ class Timeline {
     // Machine-readable node-lifecycle markers (consumed by Studio's run UI
     // and the test runner). Off by default so plain CLI runs stay clean;
     // any consumer that needs them sets one of the opt-in env vars.
-    const emitMarkers =
-      String(process.env.ZIBBY_EMIT_GRAPH_MARKERS || '').trim() === '1' ||      // canonical
-      String(process.env.ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS || '').trim() === '1' || // legacy explicit force
-      // @deprecated — Studio-specific gate kept for one release. Studio
-      // should migrate to ZIBBY_EMIT_GRAPH_MARKERS=1.
+    const canonical =
+      String(process.env.ZIBBY_EMIT_GRAPH_MARKERS || '').trim() === '1' ||
+      String(process.env.ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS || '').trim() === '1';
+    // @deprecated — Studio-specific gate kept for one release.
+    const legacyStudio =
+      !canonical &&
       String(process.env.ZIBBY_RUN_SOURCE || '').trim().toLowerCase() === 'studio';
-    this._emitWorkflowGraphMarkers = emitMarkers;
+    if (legacyStudio && process.env.ZIBBY_NO_DEPRECATION_WARNINGS !== '1') {
+      // Inline warning (no shared helper here — timeline.js can't import
+      // graph.js without a circular dep). Same key/message shape as
+      // graph.js's warnOnceDeprecated so consumers see one consistent
+      // warning regardless of which gate read the env var first.
+      // We can't dedupe across modules without a global, so we accept that
+      // marker-emission and session-path warnings fire separately if BOTH
+      // gates are exercised. Set ZIBBY_NO_DEPRECATION_WARNINGS=1 to silence.
+      console.warn(
+        '[zibby/agent-workflow] `ZIBBY_RUN_SOURCE=studio` env var is ' +
+        'deprecated for graph-marker emission. Set ' +
+        '`ZIBBY_EMIT_GRAPH_MARKERS=1` instead. ' +
+        'The Studio-specific value will be ignored in v2. ' +
+        'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
+      );
+    }
+    this._emitWorkflowGraphMarkers = canonical || legacyStudio;
   }
 
   get isInsideNode() {

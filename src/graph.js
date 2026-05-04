@@ -26,6 +26,20 @@ import {
 } from './constants.js';
 import { timeline } from './timeline.js';
 
+// ── Deprecation warnings ───────────────────────────────────────────────────
+// Fire console.warn ONCE per process for each legacy code path so consumers
+// (Studio especially, since it's closed-source) discover the migration ask
+// without seeing a noisy stream. Suppressed entirely by setting
+// ZIBBY_NO_DEPRECATION_WARNINGS=1 — Studio can opt out of its own warnings
+// while it works on the migration.
+const _deprecationWarned = new Set();
+function warnOnceDeprecated(key, message) {
+  if (_deprecationWarned.has(key)) return;
+  _deprecationWarned.add(key);
+  if (process.env.ZIBBY_NO_DEPRECATION_WARNINGS === '1') return;
+  console.warn(`[zibby/agent-workflow] ${message}`);
+}
+
 // ── Session helpers ────────────────────────────────────────────────────────
 
 function logWorkflowSessionResolution({
@@ -70,15 +84,27 @@ function logWorkflowSessionResolution({
  *   - `ZIBBY_RUN_SOURCE=studio`    (legacy Studio-specific; deprecated)
  */
 export function shouldTrustInheritedSessionEnv() {
-  return (
+  if (
     process.env.ZIBBY_TRUST_SESSION_ENV === '1' ||
     process.env.ZIBBY_TRUST_SESSION_ENV === 'true' ||
     process.env.ZIBBY_KEEP_SESSION_ENV === '1' ||
-    process.env.ZIBBY_KEEP_SESSION_ENV === 'true' ||
-    // @deprecated — Studio-specific check kept for one release. Studio should
-    // migrate to ZIBBY_TRUST_SESSION_ENV=1.
-    process.env.ZIBBY_RUN_SOURCE === 'studio'
-  );
+    process.env.ZIBBY_KEEP_SESSION_ENV === 'true'
+  ) {
+    return true;
+  }
+  // @deprecated — Studio-specific check kept for one release.
+  if (process.env.ZIBBY_RUN_SOURCE === 'studio') {
+    warnOnceDeprecated(
+      'legacy-zibby-run-source',
+      '`ZIBBY_RUN_SOURCE=studio` env var is deprecated. Set ' +
+      '`ZIBBY_TRUST_SESSION_ENV=1` (and `ZIBBY_PIN_SESSION_PATH=1` / ' +
+      '`ZIBBY_EMIT_GRAPH_MARKERS=1` if you need those gates) instead. ' +
+      'The Studio-specific value will be ignored in v2. ' +
+      'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
+    );
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -92,12 +118,22 @@ export function shouldTrustInheritedSessionEnv() {
  * land in someone else's session folder.
  */
 export function readPinnedSessionPathFromEnv() {
-  const pinned =
+  const canonical =
     process.env.ZIBBY_PIN_SESSION_PATH === '1' ||
-    process.env.ZIBBY_PIN_SESSION_PATH === 'true' ||
-    // @deprecated — kept for one release.
-    process.env.ZIBBY_RUN_SOURCE === 'studio';
-  if (!pinned) return undefined;
+    process.env.ZIBBY_PIN_SESSION_PATH === 'true';
+  // @deprecated — kept for one release.
+  const legacy = !canonical && process.env.ZIBBY_RUN_SOURCE === 'studio';
+  if (legacy) {
+    warnOnceDeprecated(
+      'legacy-zibby-run-source',
+      '`ZIBBY_RUN_SOURCE=studio` env var is deprecated. Set ' +
+      '`ZIBBY_PIN_SESSION_PATH=1` (and `ZIBBY_TRUST_SESSION_ENV=1` / ' +
+      '`ZIBBY_EMIT_GRAPH_MARKERS=1` if you need those gates) instead. ' +
+      'The Studio-specific value will be ignored in v2. ' +
+      'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
+    );
+  }
+  if (!canonical && !legacy) return undefined;
   const raw = process.env.ZIBBY_SESSION_PATH;
   if (raw == null || String(raw).trim() === '') return undefined;
   try {
@@ -433,6 +469,13 @@ export class WorkflowGraph {
    *                                             abort-checkpoint, returns `{ stoppedExternally: true }`, and runs cleanup.
    *                                             The legacy stop-file watcher (`.zibby-stop` / `.zibby-studio-stop`) feeds
    *                                             the same internal abort, so all stop paths converge to one return shape.
+   * @param {number}            [options.strategyAbortTimeoutMs=5000]
+   *                                             Engine deadman timer. After abort fires, if a strategy.invoke() call
+   *                                             hasn't settled within this many ms, the engine throws AbortError on
+   *                                             behalf of graph.run, runs cleanup, and abandons the strategy promise.
+   *                                             Protects against strategies (especially third-party) that ignore
+   *                                             AbortSignal entirely. Set higher if you have legitimately long-running
+   *                                             cleanup paths inside a strategy's abort handler.
    */
   async run(agent, initialState = {}, options = {}) {
     if (!this.entryPoint) throw new Error('No entry point set for graph');
@@ -457,6 +500,16 @@ export class WorkflowGraph {
         );
       }
     }
+
+    // Engine-level deadman timeout (slice 4). Default 5s. Configurable via
+    // options.strategyAbortTimeoutMs OR config.strategyAbortTimeoutMs (so
+    // it can also be set via .zibby.config.mjs). When abort fires and a
+    // strategy doesn't settle within this window, graph.run throws
+    // AbortError itself rather than hanging on the strategy promise.
+    const strategyAbortTimeoutMs =
+      options.strategyAbortTimeoutMs ??
+      initialState.config?.strategyAbortTimeoutMs ??
+      5000;
 
     const cwd = initialState.cwd || process.cwd();
     loadDotenv({ path: join(cwd, '.env') });
@@ -611,6 +664,13 @@ export class WorkflowGraph {
       if (existsSync(legacyStopPath)) {
         try { unlinkSync(legacyStopPath); } catch { /* ignore */ }
         internalAbortController.abort();
+        warnOnceDeprecated(
+          'legacy-stop-file',
+          'Detected legacy `.zibby-studio-stop` file. Consumers should migrate ' +
+          'to either `.zibby-stop` (renamed) or pass an AbortSignal to graph.run. ' +
+          'The legacy filename will be removed in v2. ' +
+          'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
+        );
       }
 
       if (internalAbortController.signal.aborted) {
@@ -678,7 +738,57 @@ export class WorkflowGraph {
         const mod = await import('./strategy-registry.js');
         this._invokeAgent = mod.invokeAgent;
       }
-      const boundInvokeAgent = this._invokeAgent;
+      const rawInvokeAgent = this._invokeAgent;
+
+      // Apply the engine deadman to EVERY invokeAgent call — both the
+      // template-rendering wrapper (`invokeAgent` below, used by custom-
+      // execute nodes) and the raw `_coreInvokeAgent` exposed via
+      // nodeContext (used by the default Node class). Without this, the
+      // default code path bypasses the deadman entirely and a strategy
+      // that ignores AbortSignal hangs graph.run forever.
+      const boundInvokeAgent = async (prompt, ctx, opts = {}) => {
+        // Always inject the engine's internal signal into the strategy
+        // options. Node.execute doesn't pass signal itself, so without
+        // this slice-3 strategies wouldn't see the engine's abort
+        // lifecycle on the default code path. Engine wins by ordering.
+        const strategyPromise = rawInvokeAgent(prompt, ctx, {
+          ...opts,
+          signal: internalAbortController.signal,
+        });
+        // Suppress "unhandled rejection" if the deadman wins and the
+        // strategy later rejects on its own.
+        strategyPromise.catch(() => {});
+
+        // Pre-aborted: skip the race — strategy will see signal.aborted
+        // synchronously and reject quickly.
+        if (internalAbortController.signal.aborted) {
+          return strategyPromise;
+        }
+        return Promise.race([
+          strategyPromise,
+          new Promise((_resolve, reject) => {
+            const onAbortStartDeadman = () => {
+              // NOTE: do NOT .unref() this timer. Unref'd timers don't
+              // count for keepalive AND can be skipped if nothing else
+              // keeps the loop alive — which is exactly the case when
+              // we're waiting on a hanging strategy promise that never
+              // schedules anything.
+              setTimeout(() => {
+                const err = new Error(
+                  `Strategy ignored AbortSignal — engine deadman fired after ${strategyAbortTimeoutMs}ms`,
+                );
+                err.name = 'AbortError';
+                reject(err);
+              }, strategyAbortTimeoutMs);
+            };
+            internalAbortController.signal.addEventListener(
+              'abort',
+              onAbortStartDeadman,
+              { once: true },
+            );
+          }),
+        ]);
+      };
 
       // Wrap invokeAgent so node code calls `invokeAgent(promptValues)` and we
       // render the node's prompt template (Handlebars) with those values.
@@ -701,6 +811,7 @@ export class WorkflowGraph {
           throw new Error(`No prompt template configured for node '${currentNode}' and no prompt provided in options`);
         }
 
+        // boundInvokeAgent already wraps the deadman; just delegate.
         return boundInvokeAgent(finalPrompt, {
           state: state.getAll(),
           images: options.images || [],
@@ -752,6 +863,13 @@ export class WorkflowGraph {
           // stop from the UI. Kept for one release; new consumers should use
           // the AbortSignal contract (graph.run({ signal })) once that lands.
           if (errMsg.includes('Stopped from Zibby Studio')) {
+            warnOnceDeprecated(
+              'legacy-error-string',
+              'Strategy returned the legacy `Stopped from Zibby Studio` error ' +
+              'string. Strategies should reject with `Error.name === "AbortError"` ' +
+              'instead. The string-match fallback will be removed in v2. ' +
+              'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
+            );
             timeline.step('Workflow stopped externally');
             state.set('stoppedExternally', true);
             state.set('stoppedByStudio', true);   // @deprecated mirror
