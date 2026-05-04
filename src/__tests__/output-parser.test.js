@@ -42,6 +42,38 @@ describe('OutputParser', () => {
 
       expect(parser.parse(text)).toEqual({ name: 'x', count: 3 });
     });
+
+    it('handles two `{...}` spans without splicing them together', () => {
+      // Greedy regex would capture `{"name": "first"}. Note: {"name": "second"}`
+      // and fail JSON.parse. Non-greedy fallback picks the first object.
+      const parser = new OutputParser({ name: SchemaTypes.string() });
+      const text = 'Here you go: {"name": "first"}. Note: {"name": "second"}';
+
+      expect(parser.parse(text)).toEqual({ name: 'first' });
+    });
+
+    it('handles nested objects (greedy fallback wins)', () => {
+      // Non-greedy regex matches `{"outer": {"inner": 1}` (truncated, fails parse).
+      // Greedy fallback matches the whole thing and parses correctly.
+      const parser = new OutputParser({
+        outer: { type: 'object', required: true, validate: (v) => v && typeof v === 'object' ? null : 'must be object' },
+      });
+      const text = 'Result: {"outer": {"inner": 1}}';
+
+      expect(parser.parse(text)).toEqual({ outer: { inner: 1 } });
+    });
+
+    it('schema validation errors are NOT swallowed by parse-strategy fallback', () => {
+      // If JSON parses cleanly but FAILS validation, we should see the
+      // validation error — not silently fall through to the next candidate
+      // and end up wrapping the whole thing in {result}.
+      const parser = new OutputParser({
+        status: SchemaTypes.enum(['ok', 'fail']),
+      });
+      const text = '{"status": "wrong-value"}';
+
+      expect(() => parser.parse(text)).toThrow(/must be one of: ok, fail/);
+    });
   });
 
   describe('validate — required fields', () => {

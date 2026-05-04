@@ -56,7 +56,10 @@ export class Node {
       } catch (error) {
         logger.error(`[workflow] node '${this.name}' failed: ${error.message}`);
         if (error.name === 'ZodError') {
-          logger.error(`Schema errors: ${JSON.stringify(error.errors, null, 2)}`);
+          // Zod v3+ exposes .issues; older majors used .errors. Defensive
+          // fallback so a downstream user pinned to an older Zod still
+          // gets a real log line, not `undefined`.
+          logger.error(`Schema errors: ${JSON.stringify(error.issues || error.errors, null, 2)}`);
         }
         return { success: false, error: error.message, raw: null };
       }

@@ -212,6 +212,10 @@ export class WorkflowGraph {
     this.nodePrompts = new Map();
     this.nodeOptions = new Map();
     this._invokeAgent = options.invokeAgent || null;
+    // Cache compiled Handlebars templates by node name. Templates don't
+    // change after addNode(), so compiling once per node-execution is
+    // unnecessary CPU. Map<nodeName, compiledFn>.
+    this._compiledPrompts = new Map();
   }
 
   setStateSchema(schema) { this.stateSchema = schema; return this; }
@@ -512,14 +516,29 @@ export class WorkflowGraph {
     let currentNode = this.entryPoint;
     const executionLog = [];
 
+    // Recursion guard: a conditional edge that routes back to itself (or any
+    // cycle in the graph) would otherwise burn forever — under the agent-CLI
+    // scope that's a real paid claude-code session running indefinitely.
+    // Configurable via .zibby.config.mjs `recursionLimit`; default 100 is
+    // ample for the documented sequential-pipeline use case (typically 3-7
+    // nodes, conditional retries push that to ~20 worst-case).
+    const maxSteps = config?.recursionLimit ?? 100;
+    let stepCount = 0;
+
+    try {
     while (currentNode && currentNode !== 'END') {
+      if (++stepCount > maxSteps) {
+        throw new Error(
+          `Workflow exceeded recursion limit (${maxSteps}) — likely a cyclic ` +
+          `conditional route. Set config.recursionLimit if you need a higher cap.`
+        );
+      }
+
       const studioStopPath = join(sessionPath, STUDIO_STOP_REQUEST_FILE);
       if (existsSync(studioStopPath)) {
         console.warn('\n🛑 Studio stop requested — ending workflow.');
         try { unlinkSync(studioStopPath); } catch { /* ignore */ }
-        if (agent && typeof agent.cleanup === 'function') {
-          try { await agent.cleanup(); } catch { /* ignore */ }
-        }
+        // cleanup() runs in the outer finally — no need to call it here.
         timeline.step('Workflow stopped by Studio');
         return {
           success: true,
@@ -589,8 +608,13 @@ export class WorkflowGraph {
         let finalPrompt = options.prompt || '';
 
         if (promptTemplate) {
+          let compiled = this._compiledPrompts.get(currentNode);
+          if (!compiled) {
+            compiled = Handlebars.compile(promptTemplate, { noEscape: true });
+            this._compiledPrompts.set(currentNode, compiled);
+          }
           try {
-            finalPrompt = Handlebars.compile(promptTemplate, { noEscape: true })(promptValues);
+            finalPrompt = compiled(promptValues);
           } catch (err) {
             console.error(`❌ Template rendering failed for node '${currentNode}':`, err.message);
             throw new Error(`Template rendering failed: ${err.message}`, { cause: err });
@@ -646,9 +670,7 @@ export class WorkflowGraph {
           if (errMsg.includes('Stopped from Zibby Studio')) {
             timeline.step('Workflow stopped by Studio');
             state.set('stoppedByStudio', true);
-            if (agent && typeof agent.cleanup === 'function') {
-              try { await agent.cleanup(); } catch { /* ignore */ }
-            }
+            // cleanup() runs in the outer finally — no need to call it here.
             return {
               success: true,
               state: state.getAll(),
@@ -707,5 +729,18 @@ export class WorkflowGraph {
       await agent.onComplete(result);
     }
     return result;
+    } finally {
+      // Cleanup runs once on EVERY exit path: success, regular failure,
+      // unexpected throw, recursion-limit, Studio stop. Previously cleanup
+      // only fired inside Studio-stop branches, so successful and failed
+      // runs leaked the strategy's MCP adapters / spawned subprocesses.
+      // Wrapped in try/catch so a buggy cleanup hook can't mask the real
+      // reason a run ended.
+      if (agent && typeof agent.cleanup === 'function') {
+        try { await agent.cleanup(); } catch (cleanupErr) {
+          console.warn(`[workflow] agent.cleanup() failed: ${cleanupErr.message}`);
+        }
+      }
+    }
   }
 }
