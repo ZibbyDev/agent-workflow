@@ -6,9 +6,23 @@
  *
  * Built-in skills are registered by importing a skills package (side-effect).
  * Custom skills call registerSkill() directly.
+ *
+ * The registry lives on globalThis so it's SHARED across module instances.
+ * In a multi-package workspace (or a deployed workflow bundle),
+ * `@zibby/agent-workflow` can be loaded twice when consumer pin ranges
+ * don't intersect — e.g. `@zibby/skills` pinning `^0.1.x` while
+ * `@zibby/core` pins `^0.2.x`. Each ESM instance has its own module scope,
+ * so a module-level `const _registry = new Map()` would mean SEPARATE
+ * registries — registering from `@zibby/skills` wouldn't be visible to a
+ * `hasSkill()` call resolved via `@zibby/core`'s copy. globalThis is the
+ * one thing every instance agrees on. Same pattern + reason as
+ * strategy-registry.js.
  */
-
-const _registry = new Map();
+const REGISTRY_KEY = Symbol.for('@zibby/agent-workflow.skills');
+if (!globalThis[REGISTRY_KEY]) {
+  globalThis[REGISTRY_KEY] = new Map();
+}
+const _registry = globalThis[REGISTRY_KEY];
 
 /**
  * Register a skill definition.
