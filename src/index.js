@@ -32,8 +32,6 @@ export {
   resolveWorkflowSession,
   shouldTrustInheritedSessionEnv,
   readPinnedSessionPathFromEnv,
-  /** @deprecated Use readPinnedSessionPathFromEnv. Removed in v2. */
-  readStudioPinnedSessionPathFromEnv,
   clearInheritedSessionEnvForFreshRun,
   syncProcessEnvToSession,
 } from './graph.js';
@@ -79,8 +77,6 @@ export {
   SESSIONS_DIR,
   SESSION_INFO_FILE,
   STOP_REQUEST_FILE,
-  /** @deprecated Use STOP_REQUEST_FILE. Removed in v2. */
-  STUDIO_STOP_REQUEST_FILE,
   RESULT_FILE,
   RAW_OUTPUT_FILE,
   EVENTS_FILE,

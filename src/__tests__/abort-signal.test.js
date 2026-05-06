@@ -25,7 +25,6 @@ import { z } from 'zod';
 import {
   WorkflowGraph,
   STOP_REQUEST_FILE,
-  STUDIO_STOP_REQUEST_FILE,
   resolveWorkflowSession,
 } from '../index.js';
 
@@ -99,7 +98,6 @@ describe('graph.run — AbortSignal public contract', () => {
     const result = await graph.run(null, { cwd: tmpCwd }, { signal: ctrl.signal });
 
     expect(result.stoppedExternally).toBe(true);
-    expect(result.stoppedByStudio).toBe(true);   // legacy mirror
     // The first node never ran — we exited at the first loop iteration's
     // signal check, before any node.execute().
     expect(exec).not.toHaveBeenCalled();
@@ -181,20 +179,7 @@ describe('graph.run — abort feeds converge (signal + legacy file)', () => {
     rmSync(tmpCwd, { recursive: true, force: true });
   });
 
-  it('legacy .zibby-studio-stop file alone still triggers stop (no signal passed)', async () => {
-    const graph = new WorkflowGraph();
-    graph.addNode('ok', makeOkNode());
-    graph.setEntryPoint('ok');
-    graph.addEdge('ok', 'END');
-
-    const { sessionPath } = resolveWorkflowSession({ cwd: tmpCwd });
-    writeFileSync(join(sessionPath, STUDIO_STOP_REQUEST_FILE), '');
-
-    const result = await graph.run(null, { cwd: tmpCwd, sessionPath });
-    expect(result.stoppedExternally).toBe(true);
-  });
-
-  it('canonical .zibby-stop file alone still triggers stop (no signal passed)', async () => {
+  it('.zibby-stop file alone triggers stop (no signal passed)', async () => {
     const graph = new WorkflowGraph();
     graph.addNode('ok', makeOkNode());
     graph.setEntryPoint('ok');
@@ -207,7 +192,7 @@ describe('graph.run — abort feeds converge (signal + legacy file)', () => {
     expect(result.stoppedExternally).toBe(true);
   });
 
-  it('signal AND legacy file together — idempotent, single exit', async () => {
+  it('signal AND stop-file together — idempotent, single exit', async () => {
     // Both feeds fire. The internal controller takes both abort() calls
     // (idempotent), the file is unlinked, and we exit exactly once.
     const graph = new WorkflowGraph();
@@ -216,7 +201,7 @@ describe('graph.run — abort feeds converge (signal + legacy file)', () => {
     graph.addEdge('ok', 'END');
 
     const { sessionPath } = resolveWorkflowSession({ cwd: tmpCwd });
-    writeFileSync(join(sessionPath, STUDIO_STOP_REQUEST_FILE), '');
+    writeFileSync(join(sessionPath, STOP_REQUEST_FILE), '');
 
     const ctrl = new AbortController();
     ctrl.abort();
@@ -228,7 +213,6 @@ describe('graph.run — abort feeds converge (signal + legacy file)', () => {
     );
 
     expect(result.stoppedExternally).toBe(true);
-    expect(result.stoppedByStudio).toBe(true);
   });
 
   it('signal aborted while file also present — both honoured, single return', async () => {

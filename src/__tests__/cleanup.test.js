@@ -15,7 +15,7 @@ import { join } from 'path';
 import { z } from 'zod';
 
 import { WorkflowGraph } from '../graph.js';
-import { STUDIO_STOP_REQUEST_FILE } from '../constants.js';
+import { STOP_REQUEST_FILE } from '../constants.js';
 import { resolveWorkflowSession } from '../graph.js';
 
 function makeAgent({ onCleanup, onComplete } = {}) {
@@ -78,7 +78,7 @@ describe('agent.cleanup() lifecycle', () => {
     expect(agent.onComplete).not.toHaveBeenCalled();
   });
 
-  it('runs cleanup() exactly once on Studio stop via stop file', async () => {
+  it('runs cleanup() exactly once on external stop via stop file', async () => {
     const agent = makeAgent();
     const graph = new WorkflowGraph();
     graph.addNode('ok', makeOkNode());
@@ -88,13 +88,12 @@ describe('agent.cleanup() lifecycle', () => {
     // Pre-create the session and drop a stop-file before running so the
     // first iteration of the loop sees it.
     const { sessionPath } = resolveWorkflowSession({ cwd: tmpCwd });
-    writeFileSync(join(sessionPath, STUDIO_STOP_REQUEST_FILE), '');
+    writeFileSync(join(sessionPath, STOP_REQUEST_FILE), '');
 
     const result = await graph.run(agent, { cwd: tmpCwd, sessionPath });
-    expect(result.stoppedByStudio).toBe(true);
-    // Critical: cleanup runs exactly once even though the old code path
-    // had cleanup at lines 520-522 (now removed) — the finally block is
-    // the single owner.
+    expect(result.stoppedExternally).toBe(true);
+    // The outer try/finally is the single cleanup owner — no double-fire
+    // even though the stop path returns early via the loop.
     expect(agent.cleanup).toHaveBeenCalledTimes(1);
   });
 

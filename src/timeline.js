@@ -15,9 +15,9 @@
  *   - `packages/skills/src/test-runner.js` (test runner's per-node tracking)
  *
  * If you change the marker prefix or payload shape, you must update both
- * consumers in the same change. Markers are emitted only when the workflow
- * runs under Studio (ZIBBY_RUN_SOURCE=studio) or when forced via
- * ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS=1, to keep regular CLI output clean.
+ * consumers in the same change. Markers are emitted only when a host opts
+ * in via ZIBBY_EMIT_GRAPH_MARKERS=1 (or the legacy alias
+ * ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS=1), to keep regular CLI output clean.
  */
 
 import chalk from 'chalk';
@@ -96,33 +96,12 @@ class Timeline {
     this._currentNode = null;
     this._origStdoutWrite = null;
     this._origStderrWrite = null;
-    // Machine-readable node-lifecycle markers (consumed by Studio's run UI
-    // and the test runner). Off by default so plain CLI runs stay clean;
-    // any consumer that needs them sets one of the opt-in env vars.
-    const canonical =
+    // Machine-readable node-lifecycle markers (consumed by the test runner
+    // and any host that wants structured run-progress events). Off by
+    // default so plain CLI runs stay clean; opt in with either env var.
+    this._emitWorkflowGraphMarkers =
       String(process.env.ZIBBY_EMIT_GRAPH_MARKERS || '').trim() === '1' ||
       String(process.env.ZIBBY_WORKFLOW_GRAPH_LOG_MARKERS || '').trim() === '1';
-    // @deprecated — Studio-specific gate kept for one release.
-    const legacyStudio =
-      !canonical &&
-      String(process.env.ZIBBY_RUN_SOURCE || '').trim().toLowerCase() === 'studio';
-    if (legacyStudio && process.env.ZIBBY_NO_DEPRECATION_WARNINGS !== '1') {
-      // Inline warning (no shared helper here — timeline.js can't import
-      // graph.js without a circular dep). Same key/message shape as
-      // graph.js's warnOnceDeprecated so consumers see one consistent
-      // warning regardless of which gate read the env var first.
-      // We can't dedupe across modules without a global, so we accept that
-      // marker-emission and session-path warnings fire separately if BOTH
-      // gates are exercised. Set ZIBBY_NO_DEPRECATION_WARNINGS=1 to silence.
-      console.warn(
-        '[zibby/agent-workflow] `ZIBBY_RUN_SOURCE=studio` env var is ' +
-        'deprecated for graph-marker emission. Set ' +
-        '`ZIBBY_EMIT_GRAPH_MARKERS=1` instead. ' +
-        'The Studio-specific value will be ignored in v2. ' +
-        'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
-      );
-    }
-    this._emitWorkflowGraphMarkers = canonical || legacyStudio;
   }
 
   get isInsideNode() {

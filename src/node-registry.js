@@ -1,4 +1,19 @@
-const registry = new Map();
+/**
+ * Node-type implementation registry.
+ *
+ * Lives on globalThis so it's SHARED across module instances. In a multi-
+ * package workspace (or a deployed workflow bundle), `@zibby/agent-workflow`
+ * can be loaded twice when consumer pin ranges don't intersect. Each ESM
+ * instance has its own module scope, so a module-local `const registry =
+ * new Map()` would mean SEPARATE registries — registering a node type
+ * from one instance wouldn't be visible to a `hasNode()` call resolved via
+ * another. Same pattern + reason as skill-registry.js + strategy-registry.
+ */
+const REGISTRY_KEY = Symbol.for('@zibby/agent-workflow.nodes');
+if (!globalThis[REGISTRY_KEY]) {
+  globalThis[REGISTRY_KEY] = new Map();
+}
+const registry = globalThis[REGISTRY_KEY];
 
 export function registerNode(type, impl) {
   registry.set(type, impl);

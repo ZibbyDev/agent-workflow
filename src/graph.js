@@ -1,11 +1,16 @@
 /**
  * Graph execution engine — similar in spirit to LangGraph's StateGraph.
  *
- * This is the home for all graph execution logic. Studio integration (stop
- * requests, pinned session paths via ZIBBY_RUN_SOURCE=studio) and node
- * lifecycle telemetry (timeline + WORKFLOW_GRAPH_LOG_MARKER_PREFIX) live here
- * so external consumers — Studio's run UI and packages/skills/test-runner —
- * keep receiving their markers regardless of who imports this module.
+ * Stop / cancel contract is consumer-agnostic AbortSignal:
+ *   - graph.run(agent, state, { signal })             public API
+ *   - .zibby-stop file in session folder               filesystem fallback
+ *   - state._signal exposed to nodes                   custom-execute opt-in
+ * Both feeds funnel through one internal AbortController; same return shape
+ * (`{ stoppedExternally: true }`) regardless of cause.
+ *
+ * Node lifecycle telemetry (timeline + WORKFLOW_GRAPH_LOG_MARKER_PREFIX) is
+ * gated on `ZIBBY_EMIT_GRAPH_MARKERS=1`, consumed by any host that wants
+ * structured run-progress events (desktop apps, test runners, CI).
  */
 
 import { WorkflowState } from './state.js';
@@ -22,23 +27,8 @@ import {
   SESSION_INFO_FILE,
   CI_ENV_VARS,
   STOP_REQUEST_FILE,
-  STUDIO_STOP_REQUEST_FILE,
 } from './constants.js';
 import { timeline } from './timeline.js';
-
-// ── Deprecation warnings ───────────────────────────────────────────────────
-// Fire console.warn ONCE per process for each legacy code path so consumers
-// (Studio especially, since it's closed-source) discover the migration ask
-// without seeing a noisy stream. Suppressed entirely by setting
-// ZIBBY_NO_DEPRECATION_WARNINGS=1 — Studio can opt out of its own warnings
-// while it works on the migration.
-const _deprecationWarned = new Set();
-function warnOnceDeprecated(key, message) {
-  if (_deprecationWarned.has(key)) return;
-  _deprecationWarned.add(key);
-  if (process.env.ZIBBY_NO_DEPRECATION_WARNINGS === '1') return;
-  console.warn(`[zibby/agent-workflow] ${message}`);
-}
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
@@ -78,33 +68,17 @@ function logWorkflowSessionResolution({
 /**
  * Returns true when the host process has spawned this workflow with
  * ZIBBY_SESSION_* env vars that should be preserved (not cleared by
- * `clearInheritedSessionEnvForFreshRun`). True when ANY of:
+ * `clearInheritedSessionEnvForFreshRun`). Set either:
  *   - `ZIBBY_TRUST_SESSION_ENV=1`  (canonical, consumer-agnostic)
- *   - `ZIBBY_KEEP_SESSION_ENV=1`   (legacy CLI-side opt-in)
- *   - `ZIBBY_RUN_SOURCE=studio`    (legacy Studio-specific; deprecated)
+ *   - `ZIBBY_KEEP_SESSION_ENV=1`   (legacy CLI-side opt-in, equivalent)
  */
 export function shouldTrustInheritedSessionEnv() {
-  if (
+  return (
     process.env.ZIBBY_TRUST_SESSION_ENV === '1' ||
     process.env.ZIBBY_TRUST_SESSION_ENV === 'true' ||
     process.env.ZIBBY_KEEP_SESSION_ENV === '1' ||
     process.env.ZIBBY_KEEP_SESSION_ENV === 'true'
-  ) {
-    return true;
-  }
-  // @deprecated — Studio-specific check kept for one release.
-  if (process.env.ZIBBY_RUN_SOURCE === 'studio') {
-    warnOnceDeprecated(
-      'legacy-zibby-run-source',
-      '`ZIBBY_RUN_SOURCE=studio` env var is deprecated. Set ' +
-      '`ZIBBY_TRUST_SESSION_ENV=1` (and `ZIBBY_PIN_SESSION_PATH=1` / ' +
-      '`ZIBBY_EMIT_GRAPH_MARKERS=1` if you need those gates) instead. ' +
-      'The Studio-specific value will be ignored in v2. ' +
-      'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
-    );
-    return true;
-  }
-  return false;
+  );
 }
 
 /**
@@ -112,28 +86,15 @@ export function shouldTrustInheritedSessionEnv() {
  * app spawning the CLI with ZIBBY_SESSION_PATH already set), return its
  * resolved absolute path. Returns undefined when the host hasn't pinned one.
  *
- * Gated on `ZIBBY_PIN_SESSION_PATH=1` (canonical) OR the legacy
- * `ZIBBY_RUN_SOURCE=studio` (deprecated) so an unrelated process that
- * happens to have ZIBBY_SESSION_PATH in its environment doesn't accidentally
- * land in someone else's session folder.
+ * Gated on `ZIBBY_PIN_SESSION_PATH=1` so an unrelated process that happens
+ * to have `ZIBBY_SESSION_PATH` in its environment doesn't accidentally land
+ * in someone else's session folder.
  */
 export function readPinnedSessionPathFromEnv() {
-  const canonical =
+  const pinned =
     process.env.ZIBBY_PIN_SESSION_PATH === '1' ||
     process.env.ZIBBY_PIN_SESSION_PATH === 'true';
-  // @deprecated — kept for one release.
-  const legacy = !canonical && process.env.ZIBBY_RUN_SOURCE === 'studio';
-  if (legacy) {
-    warnOnceDeprecated(
-      'legacy-zibby-run-source',
-      '`ZIBBY_RUN_SOURCE=studio` env var is deprecated. Set ' +
-      '`ZIBBY_PIN_SESSION_PATH=1` (and `ZIBBY_TRUST_SESSION_ENV=1` / ' +
-      '`ZIBBY_EMIT_GRAPH_MARKERS=1` if you need those gates) instead. ' +
-      'The Studio-specific value will be ignored in v2. ' +
-      'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
-    );
-  }
-  if (!canonical && !legacy) return undefined;
+  if (!pinned) return undefined;
   const raw = process.env.ZIBBY_SESSION_PATH;
   if (raw == null || String(raw).trim() === '') return undefined;
   try {
@@ -142,13 +103,6 @@ export function readPinnedSessionPathFromEnv() {
     return String(raw).trim();
   }
 }
-
-/**
- * @deprecated Use `readPinnedSessionPathFromEnv`. Same behavior; the rename
- * is part of the AbortSignal-contract migration so the engine stops naming
- * a specific consumer (Studio) in its public API.
- */
-export const readStudioPinnedSessionPathFromEnv = readPinnedSessionPathFromEnv;
 
 /** Drop stale shell exports so graph + children do not write to an old session folder. */
 export function clearInheritedSessionEnvForFreshRun() {
@@ -558,12 +512,13 @@ export class WorkflowGraph {
       timeline.step('State validated against schema');
     }
 
-    // Studio spawns the CLI with ZIBBY_SESSION_PATH + ZIBBY_RUN_SOURCE=studio
-    // but often leaves initialState.sessionPath empty. Snapshot the pinned
-    // path *before* optional env clearing so we never drop the folder Studio
-    // already created (avoids a second `Date.now()_*` session dir).
-    const studioPinnedSessionPath = readStudioPinnedSessionPathFromEnv();
-    const resolvedInitialSessionPath = initialState.sessionPath || studioPinnedSessionPath;
+    // Host processes (desktop apps, IDE plugins, CLIs) can pin a specific
+    // session folder by setting ZIBBY_PIN_SESSION_PATH=1 + ZIBBY_SESSION_PATH
+    // before spawning. Snapshot the pinned path *before* optional env
+    // clearing so we never drop the folder the host already created
+    // (avoids a second `Date.now()_*` session dir).
+    const pinnedSessionPath = readPinnedSessionPathFromEnv();
+    const resolvedInitialSessionPath = initialState.sessionPath || pinnedSessionPath;
     if (!resolvedInitialSessionPath) {
       clearInheritedSessionEnvForFreshRun();
     }
@@ -649,28 +604,16 @@ export class WorkflowGraph {
       }
 
       // Stop detection. Two feeds, one exit point:
-      //   - Legacy stop-file watcher (BC): if either filename appears in the
-      //     session folder, abort the internal controller and unlink.
-      //   - External AbortSignal (new): options.signal already forwarded to
+      //   - File watcher: if `.zibby-stop` appears in the session folder,
+      //     abort the internal controller and unlink.
+      //   - External AbortSignal: options.signal already forwarded to
       //     internalAbortController via the listener above.
       // After both feeds run, a single check on internalAbortController.signal
       // .aborted is the exit gate — same return shape regardless of cause.
       const stopPath = join(sessionPath, STOP_REQUEST_FILE);
-      const legacyStopPath = join(sessionPath, STUDIO_STOP_REQUEST_FILE);
       if (existsSync(stopPath)) {
         try { unlinkSync(stopPath); } catch { /* ignore */ }
         internalAbortController.abort();
-      }
-      if (existsSync(legacyStopPath)) {
-        try { unlinkSync(legacyStopPath); } catch { /* ignore */ }
-        internalAbortController.abort();
-        warnOnceDeprecated(
-          'legacy-stop-file',
-          'Detected legacy `.zibby-studio-stop` file. Consumers should migrate ' +
-          'to either `.zibby-stop` (renamed) or pass an AbortSignal to graph.run. ' +
-          'The legacy filename will be removed in v2. ' +
-          'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
-        );
       }
 
       if (internalAbortController.signal.aborted) {
@@ -681,8 +624,7 @@ export class WorkflowGraph {
           success: true,
           state: state.getAll(),
           executionLog,
-          stoppedExternally: true,   // canonical contract going forward
-          stoppedByStudio: true,     // @deprecated — kept for one release
+          stoppedExternally: true,
         };
       }
 
@@ -858,34 +800,9 @@ export class WorkflowGraph {
         executionLog.push({ node: currentNode, success: result.success, duration, timestamp: new Date().toISOString() });
 
         if (!result.success) {
-          const errMsg = String(result.error || '');
-          // Legacy: Studio used this exact error phrase to signal a graceful
-          // stop from the UI. Kept for one release; new consumers should use
-          // the AbortSignal contract (graph.run({ signal })) once that lands.
-          if (errMsg.includes('Stopped from Zibby Studio')) {
-            warnOnceDeprecated(
-              'legacy-error-string',
-              'Strategy returned the legacy `Stopped from Zibby Studio` error ' +
-              'string. Strategies should reject with `Error.name === "AbortError"` ' +
-              'instead. The string-match fallback will be removed in v2. ' +
-              'Suppress with ZIBBY_NO_DEPRECATION_WARNINGS=1.',
-            );
-            timeline.step('Workflow stopped externally');
-            state.set('stoppedExternally', true);
-            state.set('stoppedByStudio', true);   // @deprecated mirror
-            // cleanup() runs in the outer finally — no need to call it here.
-            return {
-              success: true,
-              state: state.getAll(),
-              executionLog,
-              stoppedExternally: true,
-              stoppedByStudio: true,             // @deprecated — kept for one release
-            };
-          }
-
           // Abort-aware failure handling: if abort fired during this node
-          // (external signal OR stop-file), the failure is expected — strategies
-          // (slice 3) reject with AbortError when their spawned child gets
+          // (external signal OR stop-file), the failure is expected —
+          // strategies reject with AbortError when their spawned child gets
           // SIGTERM, and custom-execute nodes can opt-in to bailing on
           // state._signal.aborted. In either case, exit cleanly with the
           // canonical stop shape rather than throwing as a hard failure.
@@ -896,7 +813,6 @@ export class WorkflowGraph {
               state: state.getAll(),
               executionLog,
               stoppedExternally: true,
-              stoppedByStudio: true,   // @deprecated mirror — kept for one release
             };
           }
 
