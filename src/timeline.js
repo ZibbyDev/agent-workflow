@@ -254,7 +254,9 @@ class Timeline {
   }
 
   graphComplete() {
-    this._rawWrite(chalk.green.bold('✓ Workflow completed'));
+    // No-op. Callers (CLI run-local/run, cloud trigger handler) print
+    // their own slug+timing summary after graph.run() returns; emitting
+    // a generic "✓ Workflow completed" here just doubled it.
   }
 }
 
