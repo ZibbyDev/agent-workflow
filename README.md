@@ -5,6 +5,8 @@
 [![Types](https://img.shields.io/npm/types/@zibby/agent-workflow.svg)](https://www.npmjs.com/package/@zibby/agent-workflow)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+[Deutsch](./i18n/README.de.md) | [Español](./i18n/README.es.md) | [français](./i18n/README.fr.md) | [日本語](./i18n/README.ja.md) | [한국어](./i18n/README.ko.md) | [Português](./i18n/README.pt.md) | [Русский](./i18n/README.ru.md) | [中文](./i18n/README.zh.md)
+
 📖 **Full docs:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
 > **The cloud pipeline for Claude Code, Cursor, Codex, and Gemini.** Compose them into structured workflows with Zod-validated handoff between nodes. Vendor-neutral, JavaScript-first, runs locally or in our cloud.
@@ -88,7 +90,9 @@ All workflow operations live under `zibby workflow <verb>` for consistency. The 
 
 **Local vs cloud identity**: workflow folder names (`my-pipeline`) are *local* — used by `workflow new`, `workflow start`, `workflow deploy`. Cloud workflows are identified by **UUID** — used by `workflow trigger`, `workflow logs`, `workflow download`, `workflow delete`. After your first `deploy`, the UUID is cached in `.zibby/workflows/<name>/.zibby-deploy.json` (commit it to git so collaborators share the same canonical reference).
 
-The CLI also integrates with [Zibby Studio](https://zibby.app) — a desktop UI for visualising live runs, pinning sessions, and stopping a workflow from a button.
+The CLI also integrates with [Zibby Studio](https://zibby.dev) — a desktop UI for visualising live runs, pinning sessions, and stopping a workflow from a button.
+
+> 📋 **Full CLI cheat sheet** including `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push` (UI agent memory + team sync), and `zibby test` is in [`@zibby/cli`'s README](https://www.npmjs.com/package/@zibby/cli). Workflow commands above are the engine-relevant subset.
 
 ---
 
