@@ -51,12 +51,14 @@ describe('graph.run — strategyAbortTimeoutMs deadman', () => {
     const graph = makeIgnoresSignalGraph();
     const ctrl = new AbortController();
 
-    // Long enough for graph.run setup (config load, session resolve,
-    // mkdir, etc — ~80ms cold) to complete and node.execute to actually
-    // start hanging on invokeAgent. If we abort too early, the engine's
-    // top-of-loop signal check catches it BEFORE node.execute, and the
-    // deadman path is bypassed entirely.
-    setTimeout(() => ctrl.abort(), 300);
+    // 1s (not 300ms) for graph.run setup — config load, session resolve,
+    // mkdir, etc. — to finish AND node.execute to actually start hanging
+    // on invokeAgent BEFORE we fire abort. Under publish-script parallel
+    // load setup can take 200-400ms, so a tighter delay sometimes had us
+    // aborting before invokeAgent started, which short-circuits via the
+    // engine's top-of-loop signal check (deadman never fires, elapsed
+    // ~80-300ms, lower bound check fails). 1s is reliably past startup.
+    setTimeout(() => ctrl.abort(), 1000);
 
     const t0 = Date.now();
     const result = await graph.run(null, { cwd: tmpCwd }, {
@@ -66,14 +68,13 @@ describe('graph.run — strategyAbortTimeoutMs deadman', () => {
     const elapsed = Date.now() - t0;
 
     expect(result.stoppedExternally).toBe(true);
-    // 300ms abort delay + 200ms deadman = ~500ms target. NOT 5s (default).
-    // Lower bound is loose (400ms not 450ms) because the publish-script CI
-    // runs many vitest suites in parallel and the event loop can fire the
-    // deadman a couple ticks early under contention. Anything well under
-    // 2s confirms the deadman fired (vs the 5s default that would block
-    // here for the full timeout).
-    expect(elapsed).toBeLessThan(2000);
-    expect(elapsed).toBeGreaterThanOrEqual(400);
+    // 1000ms abort delay + 200ms deadman = ~1200ms target. NOT 5s (default).
+    // Anything well under 3s confirms the deadman fired (vs the 5s default
+    // that would block here). Lower bound 1100 — within scheduler slop of
+    // the expected 1200, distinguishes from "engine top-of-loop caught
+    // signal before invokeAgent".
+    expect(elapsed).toBeLessThan(3000);
+    expect(elapsed).toBeGreaterThanOrEqual(1100);
   });
 
   it('a well-behaved strategy that aborts promptly never trips the deadman', async () => {
