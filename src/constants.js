@@ -34,10 +34,14 @@ export const SKILLS = {
   CORE_TOOLS:       'core-tools',
   WORKFLOW_BUILDER: 'workflow-builder',
   // SKILLS.SESSION — opt-in conversation continuity for Claude-backed
-  // nodes. Stateful (needs a configured instance); the user wires it
-  // declaratively in `.zibby.config.mjs` `skills` field, e.g.
+  // nodes. The skill is registered globally via
   //   import { sessionSkill } from '@zibby/core';
-  //   export default { skills: { session: sessionSkill() } };
+  //   import { registerSkill } from '@zibby/agent-workflow';
+  //   registerSkill(sessionSkill());
+  // (typically called once at the top of graph.mjs). Declaring the
+  // skill instance under `.zibby.config.mjs` `skills:` does NOT work
+  // in cloud — the deploy bundler JSON-serializes that field, which
+  // strips function properties like invokeAgentOptions.
   SESSION:          'session',
 };
 
