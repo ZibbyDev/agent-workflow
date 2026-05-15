@@ -15,6 +15,7 @@
 
 import { WorkflowState } from './state.js';
 import { Node, ConditionalNode } from './node.js';
+import { dispatchSubgraph } from './sub-graph-executor.js';
 import { ContextLoader } from './context-loader.js';
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -237,6 +238,68 @@ export class WorkflowGraph {
   getStateSchema()       { return this.stateSchema; }
 
   addNode(name, nodeOrConfig, options = {}) {
+    // Sub-graph short-circuit. If the node config declares another
+    // workflow as its body (`{ workflow: 'other-name' }`), wrap it as a
+    // custom-execute node that POSTs to the trigger endpoint and (for
+    // sync mode) polls until the child reaches a terminal status.
+    //
+    // Authoring shape this enables:
+    //
+    //   g.addNode('audit',  { workflow: 'deep-audit' });               // sync
+    //   g.addNode('notify', { workflow: 'slack', async: true });       // fire-forget
+    //   g.addNode('analyze', {
+    //     workflow: 'deep-audit',
+    //     input:  (state) => ({ ticketId: state.ticketId }),
+    //     output: 'auditResult',                       // dot-path on child final state
+    //     timeoutMs: 5 * 60 * 1000,
+    //   });
+    //
+    // Identity stays simple: same project's workflowType lookup at
+    // trigger time. UUIDs never appear in user code — DDB enforces
+    // unique (projectId, workflowType), so the name is unambiguous.
+    if (!(nodeOrConfig instanceof Node) && nodeOrConfig && typeof nodeOrConfig === 'object' && typeof nodeOrConfig.workflow === 'string') {
+      const subgraphCfg = nodeOrConfig;
+      const wrapped = {
+        name,
+        // Sub-graphs are custom-code by definition — there's no LLM call
+        // and no outputSchema to validate; the child's final state IS
+        // the output. _isCustomCode bypasses Node's outputSchema check.
+        _isCustomCode: true,
+        execute: async (context) => {
+          const allState = context?.state && typeof context.state.getAll === 'function'
+            ? context.state.getAll()
+            : context;
+          // Input resolution: callable (state) => obj, or plain object
+          // passed verbatim, or undefined → child gets {}.
+          let resolvedInput;
+          if (typeof subgraphCfg.input === 'function') {
+            resolvedInput = subgraphCfg.input(allState);
+          } else if (subgraphCfg.input && typeof subgraphCfg.input === 'object') {
+            resolvedInput = subgraphCfg.input;
+          } else {
+            resolvedInput = {};
+          }
+
+          return dispatchSubgraph(subgraphCfg.workflow, {
+            input: resolvedInput,
+            async: subgraphCfg.async === true,
+            conversationId: typeof subgraphCfg.conversationId === 'function'
+              ? subgraphCfg.conversationId(allState)
+              : subgraphCfg.conversationId,
+            output: subgraphCfg.output,
+            timeoutMs: subgraphCfg.timeoutMs,
+            pollIntervalMs: subgraphCfg.pollIntervalMs,
+          });
+        },
+      };
+      const node = new Node(wrapped);
+      node.name = name;
+      this.nodes.set(name, node);
+      if (options.prompt) this.nodePrompts.set(name, options.prompt);
+      if (Object.keys(options).length > 0) this.nodeOptions.set(name, options);
+      return this;
+    }
+
     const node = nodeOrConfig instanceof Node ? nodeOrConfig : new Node(nodeOrConfig);
     node.name = name;
     this.nodes.set(name, node);
