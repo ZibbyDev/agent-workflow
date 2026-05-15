@@ -265,6 +265,15 @@ export class WorkflowGraph {
         // and no outputSchema to validate; the child's final state IS
         // the output. _isCustomCode bypasses Node's outputSchema check.
         _isCustomCode: true,
+        // Propagate Node-level cross-cutting concerns from the user's
+        // sub-graph config. Retries here re-run the WHOLE dispatch
+        // (POST + poll loop) on transient failures — the graph engine
+        // already wraps node.execute() in a retry loop using these
+        // fields, so we get LangGraph-style RetryPolicy for free as
+        // long as we pass them through. `onComplete` runs against
+        // whatever the sub-graph extracted (resolved by output:).
+        retries: subgraphCfg.retries,
+        onComplete: subgraphCfg.onComplete,
         execute: async (context) => {
           const allState = context?.state && typeof context.state.getAll === 'function'
             ? context.state.getAll()

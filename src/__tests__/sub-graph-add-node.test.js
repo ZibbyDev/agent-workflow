@@ -113,4 +113,26 @@ describe('addNode — sub-graph short-circuit', () => {
     const node = g.nodes.get('plain');
     expect(typeof node.customExecute).toBe('function');
   });
+
+  it('propagates user-supplied `retries:` to the Node so the engine retries transient sub-graph failures', async () => {
+    // LangGraph parity: their per-node RetryPolicy applies to subgraph
+    // nodes. Ours leverages Node's existing retries field — but only
+    // works if addNode passes the field through, not just the workflow
+    // name + input/output. Regression-guard the wiring.
+    const g = new WorkflowGraph();
+    g.addNode('flaky', { workflow: 'sometimes-fails', retries: 3 });
+    const node = g.nodes.get('flaky');
+    expect(node.retries).toBe(3);
+  });
+
+  it('propagates `onComplete:` hook so users can post-process the extracted sub-graph result', async () => {
+    const hook = vi.fn();
+    const g = new WorkflowGraph();
+    g.addNode('audit', {
+      workflow: 'deep-audit',
+      onComplete: hook,
+    });
+    const node = g.nodes.get('audit');
+    expect(node.onComplete).toBe(hook);
+  });
 });

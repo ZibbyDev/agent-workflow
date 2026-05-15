@@ -134,7 +134,7 @@ describe('dispatchSubgraph — sync mode', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/executions/child-1');
   });
 
-  it('extracts a dot-path from finalState when `output` is set', async () => {
+  it('extracts a dot-path from finalState when `output` is a string', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))
       .mockResolvedValueOnce(mockResponse({
@@ -144,6 +144,40 @@ describe('dispatchSubgraph — sync mode', () => {
 
     const result = await dispatchSubgraph('deep-audit', { output: 'audit.score', pollIntervalMs: 1 });
     expect(result).toBe(99);
+  });
+
+  it('extracts via function when `output` is callable (LangGraph wrapper-function parity)', async () => {
+    // Dot-paths are sugar for the simple case; the function form is
+    // for when you need multiple fields or want to reshape on the way
+    // out. Equivalent of LangGraph's wrapper-node pattern compressed
+    // into the node config.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))
+      .mockResolvedValueOnce(mockResponse({
+        json: { data: { status: 'completed', finalState: { audit: { score: 99, label: 'pass' } } } },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await dispatchSubgraph('deep-audit', {
+      output: (finalState) => ({
+        verdict: finalState.audit.label,
+        confidence: finalState.audit.score,
+      }),
+      pollIntervalMs: 1,
+    });
+    expect(result).toEqual({ verdict: 'pass', confidence: 99 });
+  });
+
+  it('returns the whole finalState when `output` is omitted', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))
+      .mockResolvedValueOnce(mockResponse({
+        json: { data: { status: 'completed', finalState: { audit: { score: 99 } } } },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await dispatchSubgraph('deep-audit', { pollIntervalMs: 1 });
+    expect(result).toEqual({ audit: { score: 99 } });
   });
 
   it('throws SUBGRAPH_TRIGGER_FAILED-tagged error when child ends in failed status', async () => {
@@ -176,6 +210,66 @@ describe('dispatchSubgraph — sync mode', () => {
 
     await expect(dispatchSubgraph('child', { pollIntervalMs: 1, timeoutMs: 5 }))
       .rejects.toThrow(/timed out/);
+  });
+});
+
+describe('dispatchSubgraph — auth + context propagation (LangGraph #5700 regression guard)', () => {
+  // LangGraph's most-complained-about parent-child bug: runtime
+  // `context=` from the parent doesn't reach mounted subgraph nodes.
+  // Our equivalent risk: the Fargate parent's auth + project + parent
+  // executionId must reach every child trigger. These tests pin the
+  // invariant so we don't ship the equivalent regression.
+
+  it('every sub-graph POST carries the parent task\'s PROJECT_API_TOKEN as Bearer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ json: { jobId: 'c', status: 'accepted' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await dispatchSubgraph('child', { async: true });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers.Authorization).toBe('Bearer tok-abc');
+  });
+
+  it('every sub-graph POST routes to the parent task\'s PROJECT_ID (no cross-project leakage)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ json: { jobId: 'c', status: 'accepted' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await dispatchSubgraph('child', { async: true });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/projects/proj-1/');
+  });
+
+  it('parent EXECUTION_ID becomes the child\'s parentExecutionId on every dispatch (sync + async)', async () => {
+    const syncFetch = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'sync-c' } }))
+      .mockResolvedValueOnce(mockResponse({
+        json: { data: { status: 'completed', finalState: { ok: true } } },
+      }));
+    vi.stubGlobal('fetch', syncFetch);
+
+    await dispatchSubgraph('child', { pollIntervalMs: 1 });
+    const syncBody = JSON.parse(syncFetch.mock.calls[0][1].body);
+    expect(syncBody.parentExecutionId).toBe('parent-exec-99');
+
+    vi.unstubAllGlobals();
+    const asyncFetch = vi.fn().mockResolvedValue(
+      mockResponse({ json: { jobId: 'async-c' } }),
+    );
+    vi.stubGlobal('fetch', asyncFetch);
+
+    await dispatchSubgraph('child', { async: true });
+    const asyncBody = JSON.parse(asyncFetch.mock.calls[0][1].body);
+    expect(asyncBody.parentExecutionId).toBe('parent-exec-99');
+  });
+
+  it('auth check fires even on async dispatch (regression: don\'t skip the check on fast-path)', async () => {
+    delete process.env.PROJECT_API_TOKEN;
+    await expect(dispatchSubgraph('child', { async: true })).rejects.toThrow(/PROJECT_API_TOKEN/);
   });
 });
 

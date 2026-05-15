@@ -54,12 +54,31 @@ function getParentExecutionId() {
 }
 
 /**
- * Resolve a path like "result.score" against an object. Returns the
- * whole object if path is falsy.
+ * Resolve the parent's `output:` spec against the child's final state.
+ *
+ * Three accepted forms:
+ *   - string  → dot-path on finalState (e.g. 'double.doubled' → 42)
+ *   - function → called with finalState, returns whatever shape you want;
+ *                useful when one dot-path isn't enough ("I need both
+ *                doubled AND label") or when you need to reshape on the
+ *                way out (rename, filter, compute).
+ *   - undefined → return the whole finalState verbatim
+ *
+ * LangGraph's wrapper-function pattern proved that strict dot-paths are
+ * a footgun for the "I need two fields" case — accepting a function
+ * gives that back without forcing every user to write `output: (s) =>`
+ * for the simple case.
  */
-function getPath(obj, path) {
-  if (!path || typeof path !== 'string') return obj;
-  return path.split('.').reduce((acc, key) => (acc == null ? acc : acc[key]), obj);
+function resolveOutput(finalState, output) {
+  if (output == null) return finalState;
+  if (typeof output === 'function') return output(finalState);
+  if (typeof output === 'string') {
+    return output.split('.').reduce(
+      (acc, key) => (acc == null ? acc : acc[key]),
+      finalState,
+    );
+  }
+  return finalState;
 }
 
 /**
@@ -81,9 +100,11 @@ function getPath(obj, path) {
  *   Sync mode only: how long to poll before giving up.
  * @param {number} [options.pollIntervalMs=2000]
  *   Sync mode only: how often to GET the child's execution row.
- * @param {string} [options.output]
- *   Optional dot-path on the child's final state to extract. If unset,
- *   the entire child state is returned.
+ * @param {string | ((finalState: object) => any)} [options.output]
+ *   How to extract the child's result into parent state. String forms
+ *   are dot-paths on finalState (e.g. 'double.doubled'). Function form
+ *   gets the full finalState and returns whatever shape the parent
+ *   wants. Omit to merge the whole child finalState into parent state.
  *
  * @returns {Promise<any>}
  *   async: `{ jobId, status: 'accepted' }`
@@ -220,7 +241,7 @@ export async function dispatchSubgraph(workflowName, options = {}) {
         throw err;
       }
       const finalState = exec?.finalState || exec?.state || {};
-      const extracted = getPath(finalState, options.output);
+      const extracted = resolveOutput(finalState, options.output);
       logger.info(`[sub-graph] '${workflowName}' (${jobId}) completed after ${pollCount} polls`);
       return extracted;
     }

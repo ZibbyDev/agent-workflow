@@ -156,6 +156,7 @@ If you want to compose Claude Code + Cursor + Codex into one pipeline with struc
 |---|---|
 | `WorkflowGraph` | The DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
 | `Node` | One agent invocation. Config: `prompt`, `outputSchema` (Zod), optional `agent`, `retries`, `skills`. |
+| Sub-graph node | `addNode(name, { workflow: 'other-name', ... })` — dispatches another deployed workflow as a child. Sync (poll + merge) or async (`async: true`, fire-and-forget). See [Sub-graphs](#sub-graphs) below. |
 | `AgentStrategy` | Abstract base. Implement `canHandle(ctx)` and `invoke(prompt, opts)`. |
 | `registerStrategy()` | Tells the engine what agents are available. Selected by node `agent` field → `config.agents[name]` → `state.agentType`. |
 | `WorkflowState` | History-tracked state passed between nodes. `set` / `update` / `append` / `rollback`. |
@@ -165,6 +166,53 @@ If you want to compose Claude Code + Cursor + Codex into one pipeline with struc
 | `timeline` | CLI progress UX + structured `__WORKFLOW_GRAPH_LOG__` markers consumed by Studio. |
 
 State flows automatically: when node `plan` completes with output `{ tasks: [...] }`, that lands at `state.plan.tasks` and downstream nodes see it.
+
+---
+
+## Sub-graphs
+
+A **sub-graph node** dispatches another deployed workflow as a child of the current one. Useful when a step is large enough to deserve its own state schema, its own version, and its own activity-tab history — but you want a parent to call it as part of a larger flow.
+
+One extra field on the existing node config:
+
+```js
+g.addNode('audit', { workflow: 'deep-audit' });
+```
+
+That's the entire feature surface. No new imports, no UUID in user code, no separate class. The engine recognizes `workflow:` and turns the node into a sub-graph dispatcher.
+
+**Sync vs async** is a single flag:
+
+```js
+g.addNode('audit',  { workflow: 'deep-audit' });                   // sync — parent blocks until child done
+g.addNode('notify', { workflow: 'slack-notifier', async: true });  // fire-and-forget
+```
+
+**State plumbing** — each workflow has its own schema; the parent transforms parent state into child input and (optionally) extracts what it needs back out:
+
+```js
+g.addNode('audit', {
+  workflow: 'deep-audit',
+  input:  (state) => ({ ticketId: state.ticketId }),
+  output: 'auditResult.score',          // dot-path on child finalState
+  // OR: output: (childState) => ({ score: childState.auditResult.score,
+  //                                label: childState.auditResult.label }),
+  retries: 3,                           // retry whole dispatch on transient failure
+  timeoutMs: 5 * 60 * 1000,             // give up after 5min (sync mode only)
+});
+```
+
+**Errors are typed** so parents can branch:
+
+| `err.code` | When |
+|---|---|
+| `SUBGRAPH_INVALID_INPUT` | Parent's `input:` didn't satisfy child's stateSchema — server 400'd before any Fargate spawn |
+| `SUBGRAPH_QUOTA_EXCEEDED` | Account over its execution cap; sub-graph runs count separately |
+| `SUBGRAPH_TRIGGER_FAILED` | Any other dispatch failure |
+
+**Same `/trigger` endpoint as user-initiated runs.** The engine POSTs to `/projects/<id>/workflows/<child-name>/trigger` with `parentExecutionId` set. The server's input gate, quota check, and execution accounting all apply identically — a parent that fans out 10 children consumes 11 executions.
+
+**Full reference:** [docs.zibby.app/concepts/sub-graphs](https://docs.zibby.app/concepts/sub-graphs)
 
 ---
 
