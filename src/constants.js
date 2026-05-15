@@ -33,6 +33,12 @@ export const SKILLS = {
   SKILL_INSTALLER:  'skill-installer',
   CORE_TOOLS:       'core-tools',
   WORKFLOW_BUILDER: 'workflow-builder',
+  // SKILLS.SESSION — opt-in conversation continuity for Claude-backed
+  // nodes. Stateful (needs a configured instance); the user wires it
+  // declaratively in `.zibby.config.mjs` `skills` field, e.g.
+  //   import { sessionSkill } from '@zibby/core';
+  //   export default { skills: { session: sessionSkill() } };
+  SESSION:          'session',
 };
 
 /** CI env vars checked when generating session IDs. */

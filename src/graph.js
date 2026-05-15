@@ -568,12 +568,31 @@ export class WorkflowGraph {
     const _skillMiddleware = new Map();
     try { await import('@zibby/skills'); } catch { /* @zibby/skills not installed */ }
     const { getSkill } = await import('./skill-registry.js');
+
+    // Per-run merged skill registry: user's config.skills (declarative,
+    // stateful — e.g. sessionSkill({ store: ... })) overrides builtins on
+    // skill.id collision. No global mutation; the merge is local to this
+    // run only. Config key (`session`, `my-store`, anything) is decorative —
+    // matching is by skill.id property of the value.
+    const userSkillsMap = (config.skills && typeof config.skills === 'object')
+      ? config.skills
+      : {};
+    const userSkillsList = Object.values(userSkillsMap).filter(
+      (s) => s && typeof s === 'object' && typeof s.id === 'string',
+    );
+    const resolveSkill = (id) => {
+      for (const s of userSkillsList) {
+        if (s.id === id) return s;
+      }
+      return getSkill(id);
+    };
+
     const seenSkills = new Set();
     for (const [, node] of this.nodes) {
       for (const id of (node.config?.skills || [])) seenSkills.add(id);
     }
     for (const id of seenSkills) {
-      const skill = getSkill(id);
+      const skill = resolveSkill(id);
       if (typeof skill?.middleware === 'function') {
         try {
           const mw = await skill.middleware();
@@ -682,6 +701,35 @@ export class WorkflowGraph {
       }
       const rawInvokeAgent = this._invokeAgent;
 
+      // Collect `invokeAgentOptions` from any skill on this node that
+      // implements the hook (e.g. SKILLS.SESSION). The hook is the
+      // mechanism for runtime-injected options that the agent shouldn't
+      // see as tools — session continuity, auth tokens, default models,
+      // etc. Merge order is documented in the skill design memo:
+      //   skill defaults  <  later skills override  <  node-explicit opts
+      //                                              <  engine (signal)
+      // A skill returning null/undefined contributes nothing.
+      let skillInvokeOpts = {};
+      const nodeSkillIds = node.config?.skills || [];
+      for (const id of nodeSkillIds) {
+        const skill = resolveSkill(id);
+        if (typeof skill?.invokeAgentOptions !== 'function') continue;
+        try {
+          const opts = skill.invokeAgentOptions(state.getAll(), {
+            agentType: state.get('agentType'),
+            nodeName: currentNode,
+          });
+          if (opts && typeof opts === 'object') {
+            skillInvokeOpts = { ...skillInvokeOpts, ...opts };
+          }
+        } catch (err) {
+          // A buggy skill should NOT take down the whole run — log and
+          // continue without that skill's options.
+          // eslint-disable-next-line no-console
+          console.warn(`[graph] skill '${id}' invokeAgentOptions threw: ${err.message}`);
+        }
+      }
+
       // Apply the engine deadman to EVERY invokeAgent call — both the
       // template-rendering wrapper (`invokeAgent` below, used by custom-
       // execute nodes) and the raw `_coreInvokeAgent` exposed via
@@ -694,8 +742,9 @@ export class WorkflowGraph {
         // this slice-3 strategies wouldn't see the engine's abort
         // lifecycle on the default code path. Engine wins by ordering.
         const strategyPromise = rawInvokeAgent(prompt, ctx, {
-          ...opts,
-          signal: internalAbortController.signal,
+          ...skillInvokeOpts,    // skill defaults (e.g. session)
+          ...opts,                // caller-explicit overrides
+          signal: internalAbortController.signal,  // engine always wins
         });
         // Suppress "unhandled rejection" if the deadman wins and the
         // strategy later rejects on its own.
