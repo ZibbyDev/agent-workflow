@@ -224,7 +224,9 @@ export class WorkflowGraph {
     if (options.nodeMiddleware) this.middleware.push(options.nodeMiddleware);
     this.nodeTypeMap = new Map();
     this.conditionalCodeMap = new Map();
-    this.stateSchema = options.stateSchema || null;
+    this.stateSchema   = options.stateSchema   || null;
+    this.inputSchema   = options.inputSchema   || null;
+    this.contextSchema = options.contextSchema || null;
     this.nodePrompts = new Map();
     this.nodeOptions = new Map();
     this._invokeAgent = options.invokeAgent || null;
@@ -234,8 +236,34 @@ export class WorkflowGraph {
     this._compiledPrompts = new Map();
   }
 
-  setStateSchema(schema) { this.stateSchema = schema; return this; }
-  getStateSchema()       { return this.stateSchema; }
+  // Three-schema model (LangGraph/Mastra-style):
+  //   inputSchema    — what a user sends at trigger time
+  //   contextSchema  — fields the runner injects (workspace, tokens, repos…)
+  //   stateSchema    — legacy single-schema fallback. Optional.
+  //
+  // Runtime validation prefers the merge of input+context; if either is
+  // missing, falls back to stateSchema.
+  setInputSchema(schema)   { this.inputSchema   = schema; return this; }
+  setContextSchema(schema) { this.contextSchema = schema; return this; }
+  setStateSchema(schema)   { this.stateSchema   = schema; return this; }
+
+  getInputSchema()   { return this.inputSchema; }
+  getContextSchema() { return this.contextSchema; }
+  getStateSchema()   { return this.stateSchema; }
+
+  /**
+   * The schema used at runtime to validate the FULL initial state object
+   * passed into graph.run(). Derived from input+context if both are set
+   * (the new model); otherwise the legacy stateSchema.
+   */
+  _runtimeSchema() {
+    if (this.inputSchema && this.contextSchema) {
+      try { return this.inputSchema.merge(this.contextSchema); }
+      catch { /* fall through to legacy */ }
+    }
+    if (this.inputSchema && !this.contextSchema) return this.inputSchema;
+    return this.stateSchema;
+  }
 
   addNode(name, nodeOrConfig, options = {}) {
     // Sub-graph short-circuit. If the node config declares another
@@ -408,13 +436,27 @@ export class WorkflowGraph {
       }
     }
 
-    let jsonSchema = null;
-    if (this.stateSchema) {
-      try { jsonSchema = zodToJsonSchema(this.stateSchema, { target: 'openApi3' }); }
-      catch { jsonSchema = this.stateSchema; }
-    }
+    // zod-to-json-schema (v3) silently returns `{}` for Zod v4 schemas;
+    // marketplace-sync handles v4 separately via the native `z.toJSONSchema`.
+    // serialize() stays sync and best-effort here — callers that need the
+    // populated v4 shape go through the marketplace-sync helper.
+    const toJsonSchema = (schema) => {
+      if (!schema) return null;
+      try { return zodToJsonSchema(schema, { target: 'openApi3' }); }
+      catch { return null; }
+    };
 
-    return { nodes, edges, nodeConfigs, stateSchema: jsonSchema };
+    const runtime    = this._runtimeSchema();
+    const stateJson  = toJsonSchema(runtime || this.stateSchema);
+    const inputJson  = toJsonSchema(this.inputSchema);
+    const ctxJson    = toJsonSchema(this.contextSchema);
+
+    return {
+      nodes, edges, nodeConfigs,
+      stateSchema:   stateJson,
+      inputSchema:   inputJson,
+      contextSchema: ctxJson,
+    };
   }
 
   _inferConditionalTargets(routeFn) {
@@ -573,8 +615,9 @@ export class WorkflowGraph {
       || config?.context
       || {};
 
-    if (this.stateSchema) {
-      const result = this.stateSchema.safeParse(initialState);
+    const runtimeSchema = this._runtimeSchema();
+    if (runtimeSchema) {
+      const result = runtimeSchema.safeParse(initialState);
       if (!result.success) {
         const errors = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`);
         console.error('❌ Initial state validation failed:');
