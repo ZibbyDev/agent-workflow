@@ -139,16 +139,19 @@ export async function dispatchSubgraph(workflowName, options = {}) {
 
   // ── In-process fast path ────────────────────────────────────────────────
   // Conditions:
-  //   - Feature flag explicitly enabled on the task (Phase 2 opt-in).
   //   - Sync dispatch only — async children explicitly need their own
   //     process to run concurrently with the parent, so they go through
   //     the warm pool / ECS path below.
-  // Any unexpected failure in the in-process path throws SubgraphFallback,
-  // which we catch and continue to the HTTP path. Typed errors (quota,
-  // not-found, validation) are re-thrown — the HTTP path would surface
-  // the same error, no point in re-trying.
+  //   - `ZIBBY_INPROCESS_SUBGRAPH=0` opts out (kill switch for the rare
+  //     case a tenant hits a runtime-mismatch we couldn't auto-detect).
+  //     Anything else (env unset, =1, =true, …) → try in-process.
+  // The in-process executor itself throws SubgraphFallback when its own
+  // preconditions aren't met (env vars missing for local dev, no bundle,
+  // runtime mismatch, depth exceeded) — caught below, continue to HTTP.
+  // Typed errors (quota, not-found, validation) are re-thrown because
+  // HTTP would surface the same shape.
   if (
-    process.env.ZIBBY_INPROCESS_SUBGRAPH === '1'
+    process.env.ZIBBY_INPROCESS_SUBGRAPH !== '0'
     && !options.async
   ) {
     try {

@@ -21,13 +21,17 @@ function mockResponse({ ok = true, status = 200, json } = {}) {
 const ORIGINAL_ENV = {};
 
 beforeEach(() => {
-  ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID'].forEach((k) => {
+  ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH'].forEach((k) => {
     ORIGINAL_ENV[k] = process.env[k];
   });
   process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
   process.env.PROJECT_ID = 'proj-1';
   process.env.PROJECT_API_TOKEN = 'tok-abc';
   process.env.EXECUTION_ID = 'parent-exec-99';
+  // Opt out of the in-process fast path so these tests can keep
+  // asserting on the HTTP /trigger → poll → finalState sequence. The
+  // in-process path is exercised by in-process-subgraph.test.js.
+  process.env.ZIBBY_INPROCESS_SUBGRAPH = '0';
 });
 
 afterEach(() => {

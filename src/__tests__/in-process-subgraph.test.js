@@ -241,6 +241,140 @@ describe('runInProcessSubgraph — bundle not ready', () => {
   });
 });
 
+describe('runInProcessSubgraph — happy path (registry pre-populated)', () => {
+  // Regression guard for the 2026-05-19 prod-test bug: graph.run() returns
+  // `{ success, state, executionLog }` — the wrapper, not the state map.
+  // The executor must unwrap `.state` so `options.output` dot-paths resolve
+  // correctly. Before the fix, parent's downstream nodes received the
+  // wrapper object and `state.<childKey>` came back undefined.
+
+  it('unwraps graph.run() wrapper to return the .state object as finalState', async () => {
+    // Stub fetch — only begin + finalize are called once the registry has
+    // the factory (no bundle fetch in this code path).
+    const calls = [];
+    const selfMajor = (process.versions?.node || '').split('.')[0];
+    const matchingTag = `node${selfMajor}-${process.platform}-${process.arch}`;
+    mockFetch(async (url, opts) => {
+      calls.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return jsonResp({
+          childExecutionId: 'child-99',
+          runtimeTag: matchingTag,
+          bundlePresignedUrl: 'https://example.com/bundle.tgz',
+          sourcesPresignedUrl: 'https://example.com/sources.json',
+          workflowVersion: 1,
+          workflowUuid: 'wf-uuid',
+          bundleReady: true,
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    // Pre-populate the registry so the executor skips bundle-fetch +
+    // dynamic-import entirely. This is also the legitimate second-call
+    // path (registry stays warm across dispatches within a task).
+    const FakeAgentClass = class {
+      buildGraph() {
+        return {
+          run: async () => ({
+            success: true,
+            // The .state field is what resolveOutput's dot-paths walk into.
+            // Crucially, NOT the wrapper itself.
+            state: { doubled: 84, ticketKey: 'PROJ-1' },
+            executionLog: [{ node: 'double', success: true }],
+          }),
+        };
+      }
+    };
+    registry.register('child-doubler', FakeAgentClass);
+
+    const { finalState, executionId } = await runInProcessSubgraph('child-doubler', { input: { x: 1 } });
+
+    // Direct field on the wrapper would have given us .state = undefined.
+    // Unwrapped, the actual values appear at the top level — same shape
+    // resolveOutput('doubled') expects.
+    expect(finalState).toBeDefined();
+    expect(finalState.doubled).toBe(84);
+    expect(finalState.ticketKey).toBe('PROJ-1');
+    // Wrapper-only fields must NOT leak through.
+    expect(finalState.executionLog).toBeUndefined();
+    expect(finalState.success).toBeUndefined();
+    expect(executionId).toBe('child-99');
+
+    // Finalize must report completed + carry the unwrapped finalState.
+    const finalizeCall = calls.find((c) => c.url.endsWith('/finalize'));
+    expect(finalizeCall).toBeDefined();
+    expect(finalizeCall.body.status).toBe('completed');
+    expect(finalizeCall.body.finalState).toEqual({ doubled: 84, ticketKey: 'PROJ-1' });
+    expect(finalizeCall.body.durationMs).toBeTypeOf('number');
+  });
+
+  it('treats wrapper.stoppedExternally=true as cancellation', async () => {
+    mockFetch(async (url) => {
+      const selfMajor = (process.versions?.node || '').split('.')[0];
+      const matchingTag = `node${selfMajor}-${process.platform}-${process.arch}`;
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return jsonResp({
+          childExecutionId: 'child-cancel',
+          runtimeTag: matchingTag,
+          bundlePresignedUrl: 'https://example.com/bundle.tgz',
+          sourcesPresignedUrl: 'https://example.com/sources.json',
+          workflowVersion: 1,
+          workflowUuid: 'wf-uuid',
+          bundleReady: true,
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error('unexpected');
+    });
+
+    const FakeAgentClass = class {
+      buildGraph() {
+        return {
+          run: async () => ({
+            success: true,
+            stoppedExternally: true,    // set on the WRAPPER, not state
+            state: { partialWork: 'yes' },
+          }),
+        };
+      }
+    };
+    registry.register('cancelable', FakeAgentClass);
+
+    await expect(runInProcessSubgraph('cancelable')).rejects.toMatchObject({
+      code: 'SUBGRAPH_CANCELED',
+      subgraphJobId: 'child-cancel',
+    });
+  });
+
+  it('plain return value (not wrapped) is treated as finalState verbatim', async () => {
+    // Defensive shape: if a custom graph.run somehow returns the state
+    // map directly without the wrapper, do not break — pass it through.
+    mockFetch(async (url) => {
+      const selfMajor = (process.versions?.node || '').split('.')[0];
+      const matchingTag = `node${selfMajor}-${process.platform}-${process.arch}`;
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return jsonResp({
+          childExecutionId: 'child-plain',
+          runtimeTag: matchingTag,
+          bundlePresignedUrl: 'x', sourcesPresignedUrl: 'x',
+          workflowVersion: 1, workflowUuid: 'u', bundleReady: true,
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error('unexpected');
+    });
+    const FakeAgentClass = class {
+      buildGraph() { return { run: async () => ({ rawValue: 7 }) }; }
+    };
+    registry.register('plain', FakeAgentClass);
+    const { finalState } = await runInProcessSubgraph('plain');
+    // No `state` key on the return → treat the whole thing as finalState.
+    expect(finalState.rawValue).toBe(7);
+  });
+});
+
 describe('SubgraphFallback shape', () => {
   it('carries .fallback=true and .reason', () => {
     const e = new SubgraphFallback('test-reason', 'detail-string');

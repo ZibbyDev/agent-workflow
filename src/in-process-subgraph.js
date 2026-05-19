@@ -385,29 +385,30 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     throw new SubgraphFallback('no-bundle', 'workflow bundle not built yet');
   }
 
-  // 3. Fetch + extract bundle (cached after first time).
-  const cacheDir = join(CACHE_ROOT, `${workflowUuid}@${workflowVersion || '0'}`);
-  try {
-    await ensureBundleExtracted(bundlePresignedUrl, cacheDir);
-  } catch (err) {
-    if (err.fallback) {
-      await callFinalize({
-        apiBase: env.apiBase,
-        authToken: env.authToken,
-        payload: {
-          childExecutionId,
-          status: 'failed',
-          error: { message: err.message, code: err.reason },
-        },
-      });
-      throw err;
-    }
-    throw err;
-  }
-
-  // 4. Resolve child AgentClass + factory (cache the factory).
+  // 3. Resolve child AgentClass. Registry-hit path skips the entire
+  //    fetch+extract+import block — second and subsequent dispatches of
+  //    the same child within one Fargate task are zero-IO.
   let AgentClass = registry.get(workflowName);
   if (!AgentClass) {
+    // Cache miss → fetch + extract bundle, then dynamic-import the entry.
+    const cacheDir = join(CACHE_ROOT, `${workflowUuid}@${workflowVersion || '0'}`);
+    try {
+      await ensureBundleExtracted(bundlePresignedUrl, cacheDir);
+    } catch (err) {
+      if (err.fallback) {
+        await callFinalize({
+          apiBase: env.apiBase,
+          authToken: env.authToken,
+          payload: {
+            childExecutionId,
+            status: 'failed',
+            error: { message: err.message, code: err.reason },
+          },
+        });
+        throw err;
+      }
+      throw err;
+    }
     try {
       AgentClass = await loadChildAgentClass(cacheDir);
       registry.register(workflowName, AgentClass, {
@@ -447,9 +448,18 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     ...(options.input || {}),
   };
 
+  // childGraph.run() returns the run *result* wrapper:
+  //   { success: bool, state: {...}, executionLog: [...], stoppedExternally?: bool }
+  //
+  // The HTTP path's contract is that `finalState` is the child's state
+  // map (what `resolveOutput`'s dot-paths walk into), NOT the wrapper.
+  // We unwrap `runResult.state` so options.output and parent-state merge
+  // semantics match the cold-start path exactly — otherwise `output:
+  // 'someField'` returns undefined and downstream nodes break.
+  let runResult;
   let finalState;
   try {
-    finalState = await runInContext(
+    runResult = await runInContext(
       {
         executionId: childExecutionId,
         parentExecutionId: parentCtx.executionId,
@@ -460,6 +470,12 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
         signal: options.signal,
       }),
     );
+    // Defensive: some legacy graphs may have already been unwrapped by a
+    // wrapper. Detect both shapes and prefer the wrapper-shape when it
+    // carries the canonical `success` / `state` keys.
+    finalState = runResult && typeof runResult === 'object' && 'state' in runResult
+      ? runResult.state
+      : runResult;
   } catch (err) {
     await callFinalize({
       apiBase: env.apiBase,
@@ -474,9 +490,10 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     throw err;
   }
 
-  // The graph engine returns `{ stoppedExternally: true }` shape when
-  // aborted — flag that as a cancellation finalize.
-  if (finalState?.stoppedExternally) {
+  // The graph engine sets `stoppedExternally: true` on the *wrapper*
+  // when aborted — we already unwrapped to `finalState=runResult.state`,
+  // so read the flag from the wrapper instead.
+  if (runResult && typeof runResult === 'object' && runResult.stoppedExternally) {
     await callFinalize({
       apiBase: env.apiBase,
       authToken: env.authToken,
