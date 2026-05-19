@@ -26,7 +26,17 @@ export const SKILLS = {
   BROWSER:          'browser',
   JIRA:             'jira',
   GITHUB:           'github',
+  GITLAB:           'gitlab',
+  // `git` — provider-agnostic clone/list/explore tools. Auto-auths
+  // against GitHub OR GitLab depending on which token the runner
+  // injected. Use this on the workflow's first node so downstream
+  // nodes can read `state.<nodeName>.clonedRepos[].path`. Backend's
+  // SKILL_INTEGRATION_MAP renders this as "GitHub or GitLab" on the
+  // marketplace card via the {any:[...]} group semantic.
+  GIT:              'git',
   SLACK:            'slack',
+  LARK:             'lark',
+  SENTRY:           'sentry',
   MEMORY:           'memory',
   CHAT_MEMORY:      'chat-memory',
   RUNNER:           'runner',

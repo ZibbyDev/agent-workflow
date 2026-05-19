@@ -417,6 +417,19 @@ export class WorkflowGraph {
       }
       const toolDefs = (this.resolvedToolsMap || {})[nodeId];
       if (toolDefs?.toolIds) config.tools = toolDefs.toolIds;
+      // Skills declared on the node (e.g. `skills: [SKILLS.GIT]`) need
+      // to survive serialization so the backend's
+      // `deriveRequiredIntegrations` can compute the workflow's
+      // required integrations off the saved row — without this they're
+      // dropped and the marketplace card shows "Required: None" even
+      // when nodes clearly need GitHub/Jira/etc. The Node constructor
+      // stores them on `node.config.skills`; `node.skills` is empty.
+      const nodeSkills = Array.isArray(node?.config?.skills) ? node.config.skills
+                       : Array.isArray(node?.skills) ? node.skills
+                       : null;
+      if (nodeSkills && nodeSkills.length > 0) {
+        config.skills = [...nodeSkills];
+      }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
     }
 

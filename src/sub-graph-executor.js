@@ -174,7 +174,9 @@ export async function dispatchSubgraph(workflowName, options = {}) {
     }
 
     // Schema / input rejection from the trigger gate. Parent passed
-    // input that doesn't satisfy the child's stateSchema.
+    // input that doesn't satisfy the child's inputSchema (the slice the
+    // trigger caller supplies — runner-injected contextSchema fields
+    // like workspace/tokens are NOT the parent's responsibility).
     if (triggerResp.status === 400) {
       const e = new Error(
         `Sub-graph '${workflowName}' rejected input: ${detail}`,
