@@ -3,9 +3,24 @@
  * running parent workflow.
  *
  * Triggered when a node config has `{ workflow: 'name-of-other-workflow' }`.
- * The parent's Fargate container POSTs to the public trigger endpoint
- * for the named workflow in the same project, then either polls until
- * the child reaches a terminal state (sync) or fires-and-forgets (async).
+ *
+ * Two dispatch paths:
+ *
+ *   1. **In-process** (preferred for sync, fast — added Phase 2). Loads
+ *      the child's bundle into the same Node.js process as the parent
+ *      and runs it via a fresh `child.run()` invocation. Saves the
+ *      3-10s Fargate cold start. Gated on:
+ *        - `ZIBBY_INPROCESS_SUBGRAPH=1` env (set per task at default-on),
+ *        - `options.async !== true` (async sub-graphs need a separate
+ *          process to actually run in parallel),
+ *        - The runtime can fetch the child's bundle and its runtimeTag
+ *          matches the parent's. Mismatch → automatic fallback to (2).
+ *
+ *   2. **HTTP / ECS RunTask** (the original path). Parent POSTs to the
+ *      public trigger endpoint, backend spawns a fresh Fargate task,
+ *      parent polls until the child reaches a terminal status. Still
+ *      the only option for async dispatches and the safety net for
+ *      every in-process failure mode.
  *
  * Auth/URL plumbing comes from env vars already set on every Fargate
  * task by workflow-executor.js:
@@ -15,11 +30,12 @@
  *   - EXECUTION_ID      → parent's executionId (becomes child.parentExecutionId)
  *
  * Local dev: when these env vars are missing, dispatch throws a clear
- * error. We don't try to in-process the child — keeps dispatch behavior
- * consistent between local and cloud.
+ * error. In-process is never attempted without PROJECT_API_TOKEN — we
+ * keep the "no cloud creds = no sub-graphs" invariant from v1.
  */
 
 import { logger } from './logger.js';
+import { runInProcessSubgraph, SubgraphFallback } from './in-process-subgraph.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
@@ -119,6 +135,44 @@ function resolveOutput(finalState, output) {
 export async function dispatchSubgraph(workflowName, options = {}) {
   if (!workflowName || typeof workflowName !== 'string') {
     throw new Error('dispatchSubgraph: workflowName (string) is required');
+  }
+
+  // ── In-process fast path ────────────────────────────────────────────────
+  // Conditions:
+  //   - Feature flag explicitly enabled on the task (Phase 2 opt-in).
+  //   - Sync dispatch only — async children explicitly need their own
+  //     process to run concurrently with the parent, so they go through
+  //     the warm pool / ECS path below.
+  // Any unexpected failure in the in-process path throws SubgraphFallback,
+  // which we catch and continue to the HTTP path. Typed errors (quota,
+  // not-found, validation) are re-thrown — the HTTP path would surface
+  // the same error, no point in re-trying.
+  if (
+    process.env.ZIBBY_INPROCESS_SUBGRAPH === '1'
+    && !options.async
+  ) {
+    try {
+      logger.debug(`[sub-graph] trying in-process for '${workflowName}'`);
+      const { finalState } = await runInProcessSubgraph(workflowName, {
+        input: options.input,
+        conversationId: options.conversationId,
+        signal: options.signal,
+        parentAgent: options.parentAgent,
+      });
+      const extracted = resolveOutput(finalState, options.output);
+      logger.info(`[sub-graph] '${workflowName}' completed in-process`);
+      return extracted;
+    } catch (e) {
+      if (e instanceof SubgraphFallback || e?.fallback) {
+        logger.info(`[sub-graph] in-process fallback for '${workflowName}': ${e.reason || 'unknown'} — using HTTP`);
+        // Fall through to the HTTP path below. The HTTP path will mint
+        // its own child execution row; the one the begin endpoint
+        // already minted (if any) was finalized with status=canceled by
+        // the in-process executor before it threw.
+      } else {
+        throw e;
+      }
+    }
   }
 
   const apiBase = getApiBase();

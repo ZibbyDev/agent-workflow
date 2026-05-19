@@ -326,6 +326,14 @@ export class WorkflowGraph {
             output: subgraphCfg.output,
             timeoutMs: subgraphCfg.timeoutMs,
             pollIntervalMs: subgraphCfg.pollIntervalMs,
+            // Internal-only options used by the in-process path. The
+            // HTTP path ignores both. Plumbing them here means an
+            // in-process child receives the parent's abort signal
+            // (so UI cancellation propagates without polling) and the
+            // parent's agent shell (so the child resolves the same
+            // strategy unless it overrides per-node).
+            signal: allState?._signal,
+            parentAgent: context?.agent,
           });
         },
       };
