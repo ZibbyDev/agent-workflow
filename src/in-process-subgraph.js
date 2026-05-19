@@ -89,13 +89,25 @@ export class SubgraphFallback extends Error {
  * miss and the HTTP path can't help either, but the caller may want to
  * surface a single "in-process not configured" log instead of letting the
  * fetch fail with a less-readable network error.
+ *
+ * URL precedence:
+ *   - `SUBGRAPH_INTERNAL_URL` (preferred) → the SubgraphRoutes nested
+ *     stack's execute-api base URL. Empty / unset on older Fargate
+ *     images that pre-date the nested stack deploy.
+ *   - Fallback to the main `PROGRESS_API_URL` base (strip /executions
+ *     suffix) for backwards-compat — works during the rollout window
+ *     where the runtime image is updated before the backend stack.
+ *     Will 404 on /internal/subgraph/* via the main API, which the
+ *     caller treats as a fallback signal and routes through HTTP.
  */
 function readDispatchEnv() {
-  const apiBase = (process.env.PROGRESS_API_URL || '').replace(/\/executions\/?$/, '');
+  const internalUrl = (process.env.SUBGRAPH_INTERNAL_URL || '').replace(/\/$/, '');
+  const progressBase = (process.env.PROGRESS_API_URL || '').replace(/\/executions\/?$/, '');
+  const apiBase = internalUrl || progressBase;
   const projectId = process.env.PROJECT_ID;
   const authToken = process.env.PROJECT_API_TOKEN;
   if (!apiBase || !projectId || !authToken) {
-    throw new SubgraphFallback('env', 'PROGRESS_API_URL/PROJECT_ID/PROJECT_API_TOKEN missing');
+    throw new SubgraphFallback('env', 'SUBGRAPH_INTERNAL_URL/PROGRESS_API_URL/PROJECT_ID/PROJECT_API_TOKEN missing');
   }
   return { apiBase, projectId, authToken };
 }

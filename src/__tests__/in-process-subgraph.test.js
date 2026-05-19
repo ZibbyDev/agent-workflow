@@ -27,7 +27,7 @@ import { SubgraphFallback, runInProcessSubgraph } from '../in-process-subgraph.j
 import * as registry from '../subgraph-registry.js';
 import { runInContext } from '../exec-context.js';
 
-const ENV_KEYS = ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_SUBGRAPH_MAX_DEPTH'];
+const ENV_KEYS = ['PROGRESS_API_URL', 'SUBGRAPH_INTERNAL_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_SUBGRAPH_MAX_DEPTH'];
 const ORIG = {};
 
 beforeEach(() => {
@@ -61,8 +61,9 @@ function jsonResp(json, { ok = true, status = 200 } = {}) {
 }
 
 describe('runInProcessSubgraph — env preconditions', () => {
-  it('throws SubgraphFallback(env) when PROGRESS_API_URL is unset', async () => {
+  it('throws SubgraphFallback(env) when both PROGRESS_API_URL and SUBGRAPH_INTERNAL_URL are unset', async () => {
     delete process.env.PROGRESS_API_URL;
+    delete process.env.SUBGRAPH_INTERNAL_URL;
     await expect(runInProcessSubgraph('child')).rejects.toMatchObject({
       fallback: true,
       reason: 'env',
@@ -75,6 +76,19 @@ describe('runInProcessSubgraph — env preconditions', () => {
       fallback: true,
       reason: 'env',
     });
+  });
+
+  it('prefers SUBGRAPH_INTERNAL_URL over PROGRESS_API_URL when both set', async () => {
+    process.env.SUBGRAPH_INTERNAL_URL = 'https://subgraph.example.com/prod/';
+    process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
+    let capturedUrl = null;
+    mockFetch(async (url) => {
+      capturedUrl = url;
+      return jsonResp({ error: 'stop here' }, { ok: false, status: 500 });
+    });
+    await expect(runInProcessSubgraph('child')).rejects.toMatchObject({ fallback: true });
+    // Trailing slash on SUBGRAPH_INTERNAL_URL should be stripped before joining.
+    expect(capturedUrl).toBe('https://subgraph.example.com/prod/internal/subgraph/begin');
   });
 });
 
