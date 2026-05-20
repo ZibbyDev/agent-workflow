@@ -53,6 +53,18 @@ export const SKILLS = {
   // in cloud — the deploy bundler JSON-serializes that field, which
   // strips function properties like invokeAgentOptions.
   SESSION:          'session',
+  // LLM-provider admin/billing skills (paste-token integrations). See
+  // packages/skills/src/llm-billing.js for the skill objects and
+  // backend/src/handlers/llm-billing.js for the auth-side handler.
+  // Declared here so SKILLS.OPENAI_BILLING / ANTHROPIC_BILLING /
+  // CURSOR_ADMIN resolve in any consumer that imports from
+  // @zibby/core or @zibby/agent-workflow.
+  OPENAI_BILLING:    'openai_billing',
+  ANTHROPIC_BILLING: 'anthropic_billing',
+  CURSOR_ADMIN:      'cursor_admin',
+  // Notion OAuth — multi-workspace integration. Used by notify-notion
+  // and as a destination for any report-producing parent template.
+  NOTION:            'notion',
 };
 
 /** CI env vars checked when generating session IDs. */
