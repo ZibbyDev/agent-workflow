@@ -92,24 +92,6 @@ describe('runInProcessSubgraph — env preconditions', () => {
   });
 });
 
-describe('runInProcessSubgraph — depth guard', () => {
-  it('falls back when depth ≥ MAX_DEPTH', async () => {
-    // Read at call time (not module load) so this override takes effect.
-    process.env.ZIBBY_SUBGRAPH_MAX_DEPTH = '2';
-    // Build a 3-deep ALS chain so depth=3 > cap=2.
-    await runInContext({ executionId: 'a' }, async () => {
-      await runInContext({ executionId: 'b' }, async () => {
-        await runInContext({ executionId: 'c' }, async () => {
-          await expect(runInProcessSubgraph('grand-child')).rejects.toMatchObject({
-            fallback: true,
-            reason: 'depth-exceeded',
-          });
-        });
-      });
-    });
-  });
-});
-
 describe('runInProcessSubgraph — begin endpoint errors', () => {
   it('quota 429 throws typed SUBGRAPH_QUOTA_EXCEEDED (not fallback)', async () => {
     mockFetch(async () => jsonResp({

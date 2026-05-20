@@ -40,7 +40,7 @@
  * with `.reason` so `sub-graph-executor.js` can re-route to HTTP.
  */
 
-import { mkdirSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, statSync, readdirSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -51,15 +51,6 @@ import * as registry from './subgraph-registry.js';
 
 /** Default cache root — overridable via env for tests / non-standard runtimes. */
 const CACHE_ROOT = process.env.ZIBBY_SUBGRAPH_CACHE_DIR || '/tmp/zibby/subgraphs';
-
-/** Hard ceiling on nested in-process depth. Beyond this → fall back to HTTP
- *  (which puts the child on a separate Fargate task so the parent's call
- *  stack doesn't keep growing). 10 is arbitrary-but-safe; the historical
- *  HTTP path has no explicit cap. Read at call time (not module-load) so
- *  tests can override via env without juggling module reloads. */
-function maxDepth() {
-  return Number(process.env.ZIBBY_SUBGRAPH_MAX_DEPTH || 10);
-}
 
 /** Compute this process's own runtimeTag for comparison with the begin
  *  endpoint's value. Format must match the backend's `computeRuntimeTag()`. */
@@ -312,13 +303,11 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     throw new Error('runInProcessSubgraph: workflowName (string) is required');
   }
 
-  // Depth guard. Walking the ALS chain is O(depth) and we cap at MAX_DEPTH
-  // anyway, so the lookup is cheap.
+  // Depth check now lives in dispatchSubgraph (sub-graph-executor.js)
+  // — it applies to both in-process and HTTP paths, so a depth-exceeded
+  // dispatch is rejected outright instead of bypassed onto HTTP. We
+  // still read parentCtx here because subsequent code uses it.
   const parentCtx = getExecContext();
-  const cap = maxDepth();
-  if ((parentCtx.depth || 0) >= cap) {
-    throw new SubgraphFallback('depth-exceeded', `depth ${parentCtx.depth} ≥ MAX_DEPTH ${cap}`);
-  }
 
   // Env preconditions.
   let env;
@@ -394,6 +383,12 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     const cacheDir = join(CACHE_ROOT, `${workflowUuid}@${workflowVersion || '0'}`);
     try {
       await ensureBundleExtracted(bundlePresignedUrl, cacheDir);
+      // Opportunistic LRU eviction after each new extract — runs cheaply
+      // when under cap, frees the oldest cache entries when over. Keeps
+      // /tmp from growing unbounded on long-lived warm-pool tasks across
+      // many template deploys. Fire-and-forget; eviction failures are
+      // logged but never fail the dispatch.
+      try { evictCacheIfOver(); } catch { /* logged inside */ }
     } catch (err) {
       if (err.fallback) {
         await callFinalize({
@@ -524,19 +519,83 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
   return { finalState, executionId: childExecutionId };
 }
 
-/** Best-effort cache size probe — used by metrics and by the eventual
- *  LRU sweep. Returns total bytes under CACHE_ROOT or 0 if nothing yet. */
+/** Best-effort cache size probe. Returns total bytes under CACHE_ROOT
+ *  or 0 if nothing yet. Used by metrics + by `evictCacheIfOver()` below. */
 export function getCacheStats() {
   try {
     if (!existsSync(CACHE_ROOT)) return { bytes: 0, entries: 0 };
-    const { readdirSync } = require('node:fs');
     const entries = readdirSync(CACHE_ROOT);
     let bytes = 0;
     for (const e of entries) {
-      try { bytes += statSync(join(CACHE_ROOT, e)).size; } catch { /* skip */ }
+      try { bytes += dirSizeBytes(join(CACHE_ROOT, e)); } catch { /* skip */ }
     }
     return { bytes, entries: entries.length };
   } catch {
     return { bytes: 0, entries: 0 };
+  }
+}
+
+/** Recursively sum the byte size of a directory tree. */
+function dirSizeBytes(dir) {
+  let total = 0;
+  let stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop();
+    let st; try { st = statSync(cur); } catch { continue; }
+    if (st.isDirectory()) {
+      let kids; try { kids = readdirSync(cur); } catch { continue; }
+      for (const k of kids) stack.push(join(cur, k));
+    } else {
+      total += st.size;
+    }
+  }
+  return total;
+}
+
+/**
+ * LRU-ish cache eviction. Called opportunistically after each successful
+ * bundle extract — when CACHE_ROOT exceeds `cap` bytes (default 2 GB,
+ * tunable via `ZIBBY_SUBGRAPH_CACHE_CAP_BYTES`), the oldest sub-trees
+ * by mtime are deleted until total falls below 70% of cap. Skips trees
+ * that look in-use (`.lock` sentinel still present).
+ *
+ * "LRU-ish" because we use mtime, not real access tracking — Node fs
+ * doesn't update atime by default on most file systems. mtime gets bumped
+ * on each fresh extract, so cold versions naturally rank older. Good
+ * enough for warm-pool cleanup; not a replacement for a real LRU cache.
+ */
+export function evictCacheIfOver({ cap = Number(process.env.ZIBBY_SUBGRAPH_CACHE_CAP_BYTES || 2 * 1024 * 1024 * 1024) } = {}) {
+  try {
+    if (!existsSync(CACHE_ROOT)) return { evicted: 0, freedBytes: 0 };
+    const entries = readdirSync(CACHE_ROOT);
+    const rows = [];
+    let total = 0;
+    for (const name of entries) {
+      const full = join(CACHE_ROOT, name);
+      let st; try { st = statSync(full); } catch { continue; }
+      const size = st.isDirectory() ? dirSizeBytes(full) : st.size;
+      total += size;
+      rows.push({ name, full, size, mtimeMs: st.mtimeMs });
+    }
+    if (total <= cap) return { evicted: 0, freedBytes: 0, totalBytes: total };
+    rows.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
+    const targetBytes = Math.floor(cap * 0.7);
+    let freed = 0;
+    let evicted = 0;
+    for (const r of rows) {
+      if (total - freed <= targetBytes) break;
+      // Skip dirs that still have a lock sentinel — another process is
+      // mid-extract; deleting under it would corrupt the import.
+      if (existsSync(join(r.full, '.lock'))) continue;
+      try { rmSync(r.full, { recursive: true, force: true }); freed += r.size; evicted += 1; }
+      catch (e) { logger.debug(`[sub-graph cache] evict skip ${r.name}: ${e.message}`); }
+    }
+    if (evicted > 0) {
+      logger.info(`[sub-graph cache] evicted ${evicted} entr(y/ies), freed ${(freed / 1024 / 1024).toFixed(1)}MB`);
+    }
+    return { evicted, freedBytes: freed, totalBytes: total - freed };
+  } catch (e) {
+    logger.debug(`[sub-graph cache] evict failed: ${e.message}`);
+    return { evicted: 0, freedBytes: 0 };
   }
 }

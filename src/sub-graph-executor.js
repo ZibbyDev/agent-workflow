@@ -36,6 +36,7 @@
 
 import { logger } from './logger.js';
 import { runInProcessSubgraph, SubgraphFallback } from './in-process-subgraph.js';
+import { getExecContext } from './exec-context.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
@@ -135,6 +136,28 @@ function resolveOutput(finalState, output) {
 export async function dispatchSubgraph(workflowName, options = {}) {
   if (!workflowName || typeof workflowName !== 'string') {
     throw new Error('dispatchSubgraph: workflowName (string) is required');
+  }
+
+  // ── Universal depth cap ────────────────────────────────────────────────
+  // Applies to BOTH in-process and HTTP fallback. The in-process executor
+  // used to enforce this internally and throw SubgraphFallback on overflow
+  // — but that just routed the overflowing dispatch onto the HTTP path,
+  // which had no cap of its own. A workflow could chain unbounded depth
+  // by deliberately exhausting in-process budget. Move the gate up here
+  // so a hard error replaces any path of dispatch when the cap is reached.
+  //
+  // Depth is tracked in AsyncLocalStorage via exec-context — every child
+  // run that enters this process bumps `depth` by 1. Cross-Fargate hops
+  // still reset depth (the new task starts at 0), but combined with the
+  // backend's per-dispatch quota gate that's sufficient defense against
+  // accidental + most-malicious recursion.
+  const parentCtx = getExecContext();
+  const depthCap = Number(process.env.ZIBBY_SUBGRAPH_MAX_DEPTH || 10);
+  if ((parentCtx.depth || 0) >= depthCap) {
+    throw new Error(
+      `dispatchSubgraph('${workflowName}'): sub-graph depth ${parentCtx.depth} reached cap of ${depthCap}. `
+      + `Restructure the graph or raise ZIBBY_SUBGRAPH_MAX_DEPTH.`,
+    );
   }
 
   // ── In-process fast path ────────────────────────────────────────────────

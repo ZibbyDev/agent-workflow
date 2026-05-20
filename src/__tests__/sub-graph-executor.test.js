@@ -336,3 +336,40 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
       .rejects.toMatchObject({ code: 'SUBGRAPH_TRIGGER_FAILED', status: 500 });
   });
 });
+
+describe('dispatchSubgraph — depth cap', () => {
+  // Depth check lives on dispatchSubgraph so it gates BOTH in-process and
+  // HTTP paths. Used to be checked only inside runInProcessSubgraph, which
+  // meant a depth-exceeded dispatch would just fall back to HTTP — making
+  // the cap effectively meaningless on a workflow that ran out of in-process
+  // budget. These tests pin the new behavior.
+  it('throws a hard error when ALS depth >= cap (HTTP path never tried)', async () => {
+    process.env.ZIBBY_SUBGRAPH_MAX_DEPTH = '2';
+    // ZIBBY_INPROCESS_SUBGRAPH=0 is already set in beforeEach → HTTP path
+    // would normally run. Asserting fetch never gets called proves the
+    // depth cap fired before any dispatch.
+    const { runInContext } = await import('../exec-context.js');
+    const fetchSpy = vi.fn().mockResolvedValue(mockResponse({ ok: true, json: { jobId: 'j' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await runInContext({ executionId: 'a' }, async () => {
+      await runInContext({ executionId: 'b' }, async () => {
+        await runInContext({ executionId: 'c' }, async () => {
+          await expect(dispatchSubgraph('grand-child', { input: {} }))
+            .rejects.toThrow(/sub-graph depth 3 reached cap of 2/);
+        });
+      });
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when depth is under the cap', async () => {
+    process.env.ZIBBY_SUBGRAPH_MAX_DEPTH = '5';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: true, json: { jobId: 'j', status: 'accepted' } }),
+    ));
+    // depth=0 — well under cap. async:true so the executor returns the
+    // dispatch handle without polling.
+    await expect(dispatchSubgraph('child', { input: {}, async: true }))
+      .resolves.toMatchObject({ jobId: 'j' });
+  });
+});
