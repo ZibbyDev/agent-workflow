@@ -36,6 +36,12 @@ export const SKILLS = {
   GIT:              'git',
   SLACK:            'slack',
   LARK:             'lark',
+  // `chat_notify` — provider-agnostic chat notification. Routes to
+  // Slack OR Lark depending on which integration the project has
+  // connected. Backend's SKILL_INTEGRATION_MAP renders this as
+  // "Slack OR Lark" on the marketplace card via the {any:[...]}
+  // group semantic, mirroring the GIT meta-skill pattern.
+  CHAT_NOTIFY:      'chat_notify',
   SENTRY:           'sentry',
   MEMORY:           'memory',
   CHAT_MEMORY:      'chat-memory',
