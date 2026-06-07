@@ -21,6 +21,7 @@ import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { config as loadDotenv } from 'dotenv';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import Handlebars from 'handlebars';
 import {
   DEFAULT_OUTPUT_BASE,
@@ -414,7 +415,12 @@ export class WorkflowGraph {
       if (node.outputSchema) {
         try {
           if (typeof node.outputSchema._def !== 'undefined') {
-            const jsonSchema = zodToJsonSchema(node.outputSchema, { target: 'openApi3' });
+            // Native Zod v4 converter (see toJsonSchema in serialize) — the v3
+            // lib returns {} for v4 schemas, which would empty out this node's
+            // derived variables.
+            const jsonSchema = (typeof z?.toJSONSchema === 'function'
+              ? z.toJSONSchema(node.outputSchema)
+              : zodToJsonSchema(node.outputSchema, { target: 'openApi3' }));
             config.outputSchema = { jsonSchema, variables: this._flattenJsonSchemaToVariables(jsonSchema) };
           } else {
             config.outputSchema = { schema: node.outputSchema };
@@ -457,12 +463,18 @@ export class WorkflowGraph {
       }
     }
 
-    // zod-to-json-schema (v3) silently returns `{}` for Zod v4 schemas;
-    // marketplace-sync handles v4 separately via the native `z.toJSONSchema`.
-    // serialize() stays sync and best-effort here — callers that need the
-    // populated v4 shape go through the marketplace-sync helper.
+    // Prefer Zod v4's native converter. zod-to-json-schema (v3) silently
+    // returns `{}` for Zod v4 schemas (this whole tree is on zod v4), dropping
+    // every property + default — that's exactly how inputSchema landed as `{}`
+    // on CLI-deployed rows and the Trigger modal lost its `{ sinceMinutes: 60 }`
+    // pre-fill. v3 stays only as a fallback for a legacy v3 schema (or if the
+    // native converter is somehow unavailable).
     const toJsonSchema = (schema) => {
       if (!schema) return null;
+      if (typeof z?.toJSONSchema === 'function') {
+        try { return z.toJSONSchema(schema); }
+        catch { /* fall through to the v3 converter below */ }
+      }
       try { return zodToJsonSchema(schema, { target: 'openApi3' }); }
       catch { return null; }
     };
