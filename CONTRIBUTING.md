@@ -5,7 +5,7 @@ Thanks for taking the time to contribute! This is a small project — issues, PR
 ## Development setup
 
 ```bash
-git clone https://github.com/ZibbyHQ/agent-workflow.git
+git clone https://github.com/ZibbyDev/agent-workflow.git
 cd agent-workflow
 npm install
 npm run build      # esbuild → dist/*.js  +  tsc → dist/*.d.ts
@@ -71,7 +71,7 @@ These are stable contracts consumed by external tooling — change only with a m
 - `stoppedByStudio: true` return key
 - Marker payload `{ phase: 'node_begin' | 'node_end', node: string }`
 
-Consumers: [Zibby Studio](https://github.com/ZibbyHQ/studio), `@zibby/skills`'s test-runner.
+Consumers: [Zibby Studio](https://github.com/ZibbyDev/studio), `@zibby/skills`'s test-runner.
 
 ## Known limitations
 
