@@ -84,6 +84,17 @@ export const SKILLS = {
   // Notion OAuth — multi-workspace integration. Used by notify-notion
   // and as a destination for any report-producing parent template.
   NOTION:            'notion',
+  // `linear` — api-key paste-token issue tracker (linearSkill in
+  // @zibby/skills, served over MCP via bin/mcp-skill.mjs). Declared here so
+  // SKILLS.LINEAR resolves in any consumer importing from @zibby/core or
+  // @zibby/agent-workflow (e.g. the code-review review node, which loads it as
+  // an optional gather tool). Backend SKILL_INTEGRATION_MAP maps 'linear' →
+  // INTEGRATIONS.LINEAR.
+  LINEAR:            'linear',
+  // `plane` — api-key issue tracker (planeSkill spawns the official
+  // plane-mcp-server). Declared here for symmetry with the other trackers so
+  // SKILLS.PLANE resolves in any consumer.
+  PLANE:             'plane',
 };
 
 /** CI env vars checked when generating session IDs. */
