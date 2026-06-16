@@ -27,6 +27,12 @@ export const SKILLS = {
   JIRA:             'jira',
   GITHUB:           'github',
   GITLAB:           'gitlab',
+  // `figma` — read-only design context over the Figma REST API (figmaSkill
+  // in @zibby/skills). OAuth integration: the skill resolves the access
+  // token per-call via the backend. Declaring SKILLS.FIGMA on a node makes
+  // Figma a REQUIRED integration (backend SKILL_INTEGRATION_MAP maps
+  // 'figma' → INTEGRATIONS.FIGMA, gating deploy on a connected Figma).
+  FIGMA:            'figma',
   // `git` — provider-agnostic clone/list/explore tools. Auto-auths
   // against GitHub OR GitLab depending on which token the runner
   // injected. Use this on the workflow's first node so downstream
@@ -45,6 +51,13 @@ export const SKILLS = {
   SENTRY:           'sentry',
   MEMORY:           'memory',
   CHAT_MEMORY:      'chat-memory',
+  // `review-memory` — per-PR (configurable-scope) review-note persist/recall.
+  // Backed by the reviewMemorySkill in @zibby/skills, which calls Zibby's own
+  // backend POST /memory/review. Declared here so SKILLS.REVIEW_MEMORY resolves
+  // in any consumer importing from @zibby/core or @zibby/agent-workflow (e.g.
+  // the github-code-review review node). The id MUST match the skill's
+  // registered id ('review-memory').
+  REVIEW_MEMORY:    'review-memory',
   RUNNER:           'runner',
   SKILL_INSTALLER:  'skill-installer',
   CORE_TOOLS:       'core-tools',

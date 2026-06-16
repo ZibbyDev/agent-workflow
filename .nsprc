@@ -1,0 +1,22 @@
+{
+  "GHSA-gv7w-rqvm-qjhr": {
+    "active": true,
+    "notes": "esbuild: missing binary integrity verification in the Deno module enables RCE via NPM_CONFIG_REGISTRY. Build-time only — esbuild is a dev/bundling dep (via vite/tsup), never shipped or executed in production, and we never use the Deno install path. Re-evaluate when vite/tsup bump esbuild past 0.28.0; drop this exception then.",
+    "expiry": "2026-09-01"
+  },
+  "GHSA-g7r4-m6w7-qqqr": {
+    "active": true,
+    "notes": "esbuild: arbitrary file read when running the dev server on Windows. Build-time only — we never run the esbuild/vite dev server in CI or prod (bundle step only), and not on Windows. Patched in esbuild > 0.28.0. Re-evaluate on the next vite/tsup bump.",
+    "expiry": "2026-09-01"
+  },
+  "GHSA-fx2h-pf6j-xcff": {
+    "active": true,
+    "notes": "vite: server.fs.deny bypass on Windows alternate paths. Dev-server only — we ship pre-built static assets and never expose the vite dev server in prod; Windows-specific. Re-evaluate when vite ships the patched release; drop this exception then.",
+    "expiry": "2026-09-01"
+  },
+  "GHSA-v6wh-96g9-6wx3": {
+    "active": true,
+    "notes": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows, reached transitively via vite's dev-server error overlay. Dev-only (never invoked in a prod build) and Windows-specific. Re-evaluate when vite bumps launch-editor; drop this exception then.",
+    "expiry": "2026-09-01"
+  }
+}
