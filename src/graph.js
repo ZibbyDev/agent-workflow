@@ -424,7 +424,23 @@ export class WorkflowGraph {
         config.customCode = node.execute.toString();
       }
       const prompt = this.nodePrompts.get(nodeId);
-      if (prompt) config.prompt = prompt;
+      if (prompt) {
+        // Declarative string prompt (Handlebars template) — editable in the UI.
+        config.prompt = prompt;
+      } else if (typeof node.prompt === 'function') {
+        // Function prompt (`prompt: (state) => '…'`) — code, so it can't be an
+        // editable template. Still surface it for DISPLAY by rendering it once
+        // with an empty state, so the UI shows the prompt's shape instead of
+        // nothing. Marked read-only via `promptIsCode` so the editor doesn't
+        // pretend edits will apply (the function, not this text, runs).
+        try {
+          const rendered = node.prompt({});
+          if (typeof rendered === 'string' && rendered.trim()) {
+            config.prompt = rendered;
+            config.promptIsCode = true;
+          }
+        } catch { /* defensive: a function that needs real state — leave blank */ }
+      }
       if (typeof node.customExecute === 'function') {
         config.executeCode = node.customExecute.toString();
       }

@@ -2,12 +2,22 @@
  * Node — one agent execution step in a workflow graph.
  */
 
+import Handlebars from 'handlebars';
 import { OutputParser } from './output-parser.js';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { logger } from './logger.js';
 import { timeline } from './timeline.js';
 import { SESSION_INFO_FILE } from './constants.js';
+
+// Common Handlebars helpers for declarative string prompts (idempotent, shared
+// across every prompt-render path since Handlebars is a singleton):
+//   {{inc @index}}        1-based numbering (@index is 0-based)
+//   {{json someObject}}   pretty-printed JSON (e.g. env config)
+//   {{#if (eq a b)}}      equality test
+if (!Handlebars.helpers.inc) Handlebars.registerHelper('inc', (v) => Number(v) + 1);
+if (!Handlebars.helpers.json) Handlebars.registerHelper('json', (v) => JSON.stringify(v, null, 2));
+if (!Handlebars.helpers.eq) Handlebars.registerHelper('eq', (a, b) => a === b);
 
 export class Node {
   constructor(config) {
@@ -65,9 +75,20 @@ export class Node {
       }
     }
 
-    let prompt = typeof this.prompt === 'function'
-      ? this.prompt(getAllState())
-      : this.prompt;
+    // Prompt sources (both supported):
+    //   - function: `prompt: (state) => '…'` → called with state (dynamic, code).
+    //   - string:   `prompt: '…{{testSpec}}…'` → a declarative Handlebars
+    //     template, rendered here with the live state (editable in the UI, and
+    //     overridable via nodeConfigOverrides). Strings without '{{' pass through.
+    let prompt;
+    if (typeof this.prompt === 'function') {
+      prompt = this.prompt(getAllState());
+    } else if (typeof this.prompt === 'string' && this.prompt.includes('{{')) {
+      if (!this._compiledPrompt) this._compiledPrompt = Handlebars.compile(this.prompt, { noEscape: true });
+      prompt = this._compiledPrompt(getAllState());
+    } else {
+      prompt = this.prompt;
+    }
 
     const skillHints = _getState('_skillHints');
     if (skillHints) prompt = `${skillHints}\n\n${prompt}`;
