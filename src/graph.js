@@ -453,7 +453,7 @@ export class WorkflowGraph {
         edges.push({ source: from, target });
       } else if (target.conditional) {
         const codeStr = this.conditionalCodeMap.get(from) || target.routes.toString();
-        const possibleTargets = this._inferConditionalTargets(target.routes);
+        const possibleTargets = this._inferConditionalTargets(target.routes, target.labels);
         const labels = target.labels || {};
         for (const t of possibleTargets) {
           const edge = { source: from, target: t, data: { conditionalCode: codeStr } };
@@ -492,12 +492,58 @@ export class WorkflowGraph {
     };
   }
 
-  _inferConditionalTargets(routeFn) {
+  // Statically discover the set of node ids a conditional route function can
+  // return. Routes come in many shapes — `return 'a'` / `if (...) return 'a';
+  // return 'b'` / `switch` cases / ternary chains (`cond ? 'a' : 'b'`) / an
+  // arrow with an implicit-return ternary (`(x) => cond ? 'a' : 'b'`). The old
+  // implementation only matched `return '<literal>'`, so any target that lived
+  // inside a ternary or an implicit return (the sentry-triage case) was missed
+  // entirely — leaving the source node with NO outgoing edges and islanding the
+  // graph.
+  //
+  // Robust approach: pull EVERY single/double-quoted (and back-tick, when it has
+  // no interpolation) string literal out of the function source, then keep only
+  // the ones that are real routing targets. "Real" = a known node id, the
+  // START/END sentinels, or an explicit key in the route's `labels` map. This
+  // filter is what keeps us from picking up unrelated string literals (log
+  // messages, property names, etc.) that happen to appear in the body.
+  _inferConditionalTargets(routeFn, labels) {
     const fnStr = routeFn.toString();
+
+    // All quoted string literals: '…', "…", or `…` (template literals only when
+    // they contain no ${…} interpolation — an interpolated target isn't a static
+    // literal we can resolve anyway).
+    const literals = new Set();
+    const literalPattern = /(['"])((?:\\.|(?!\1).)*?)\1|`((?:\\.|[^`$]|\$(?!\{))*?)`/g;
+    let m;
+    while ((m = literalPattern.exec(fnStr)) !== null) {
+      const value = m[2] !== undefined ? m[2] : m[3];
+      if (value !== undefined && value !== '') literals.add(value);
+    }
+
+    // The valid routing-target vocabulary: every node id in this graph, the
+    // START/END sentinels, plus any keys explicitly declared in `labels`.
+    const known = new Set(['END', 'START', '__end__', '__start__']);
+    for (const nodeId of this.nodes.keys()) known.add(nodeId);
+    if (labels && typeof labels === 'object') {
+      for (const k of Object.keys(labels)) known.add(k);
+    }
+
     const targets = new Set();
-    const pattern = /return\s+['"]([^'"]+)['"]/g;
-    let match;
-    while ((match = pattern.exec(fnStr)) !== null) targets.add(match[1]);
+    for (const lit of literals) {
+      if (known.has(lit)) targets.add(lit);
+    }
+
+    // Defensive fallback: if filtering against known ids produced nothing (e.g.
+    // a graph serialized before its nodes were added, or unusual node-naming),
+    // fall back to the legacy `return '<literal>'` extraction so we never
+    // regress to fewer targets than before.
+    if (targets.size === 0) {
+      const legacy = /return\s+['"]([^'"]+)['"]/g;
+      let lm;
+      while ((lm = legacy.exec(fnStr)) !== null) targets.add(lm[1]);
+    }
+
     return [...targets];
   }
 
