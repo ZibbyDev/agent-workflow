@@ -492,6 +492,22 @@ export class WorkflowGraph {
       catch { return null; }
     };
 
+    // Explicit terminal nodes (BPMN / LangGraph `__start__`/`__end__`
+    // convention): a START derived from the entry point and an END sink derived
+    // from the END route sentinel, so every serialized graph shows where flow
+    // ENTERS and TERMINATES. Display-only — the runtime ignores them (execution
+    // is driven by `entryPoint` + the 'END' route sentinel, which already exist).
+    // Single source of truth: derived here from the graph, never declared
+    // per-template. Edges to 'END' are already emitted above; we just add the
+    // node so the frontend can render the sink instead of dropping those edges.
+    if (this.entryPoint && this.nodes.has(this.entryPoint)) {
+      nodes.unshift({ id: 'START', type: 'start', data: { nodeType: 'start', label: 'Start' } });
+      edges.unshift({ source: 'START', target: this.entryPoint });
+    }
+    if (edges.some((e) => e.target === 'END')) {
+      nodes.push({ id: 'END', type: 'end', data: { nodeType: 'end', label: 'End' } });
+    }
+
     const runtime    = this._runtimeSchema();
     const stateJson  = toJsonSchema(runtime || this.stateSchema);
     const inputJson  = toJsonSchema(this.inputSchema);
