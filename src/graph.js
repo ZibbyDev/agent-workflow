@@ -413,20 +413,27 @@ export class WorkflowGraph {
         config.executeCode = node.customExecute.toString();
       }
       if (node.outputSchema) {
-        try {
-          if (typeof node.outputSchema._def !== 'undefined') {
-            // Native Zod v4 converter (see toJsonSchema in serialize) — the v3
-            // lib returns {} for v4 schemas, which would empty out this node's
-            // derived variables.
-            const jsonSchema = (typeof z?.toJSONSchema === 'function'
-              ? z.toJSONSchema(node.outputSchema)
-              : zodToJsonSchema(node.outputSchema, { target: 'openApi3' }));
-            config.outputSchema = { jsonSchema, variables: this._flattenJsonSchemaToVariables(jsonSchema) };
-          } else {
-            config.outputSchema = { schema: node.outputSchema };
+        if (typeof node.outputSchema._def !== 'undefined') {
+          // Robust convert: prefer Zod v4's native converter, fall back to the
+          // v3 lib. This tolerates a MIXED-zod tree (e.g. a v3 template schema
+          // serialized by a v4 engine, or vice-versa) WITHOUT the noisy
+          // "failed to convert schema" warning — the native call throws on a
+          // cross-version schema, so we catch it and let the other converter
+          // handle it (v3 lib succeeds on a v3 schema). Same try/native →
+          // fall-back-to-v3 shape as the toJsonSchema() helper below. Only when
+          // BOTH genuinely fail does jsonSchema stay null (raw schema kept).
+          let jsonSchema = null;
+          if (typeof z?.toJSONSchema === 'function') {
+            try { jsonSchema = z.toJSONSchema(node.outputSchema); } catch { /* try v3 below */ }
           }
-        } catch (err) {
-          console.warn(`[workflow] failed to convert schema for ${nodeId}:`, err.message);
+          if (!jsonSchema) {
+            try { jsonSchema = zodToJsonSchema(node.outputSchema, { target: 'openApi3' }); } catch { /* leave null */ }
+          }
+          config.outputSchema = jsonSchema
+            ? { jsonSchema, variables: this._flattenJsonSchemaToVariables(jsonSchema) }
+            : { schema: node.outputSchema };
+        } else {
+          config.outputSchema = { schema: node.outputSchema };
         }
       }
       const toolDefs = (this.resolvedToolsMap || {})[nodeId];
