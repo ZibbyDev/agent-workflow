@@ -349,7 +349,17 @@ export class WorkflowGraph {
     const node = nodeOrConfig instanceof Node ? nodeOrConfig : new Node(nodeOrConfig);
     node.name = name;
     this.nodes.set(name, node);
-    if (options.prompt) this.nodePrompts.set(name, options.prompt);
+    // Prompt template precedence: the explicit addNode(..., { prompt }) option
+    // wins, but a `prompt` declared directly ON the node object also works —
+    //   export const fooNode = { name, outputSchema, prompt: `...{{var}}...` };
+    // so the prompt lives next to the node's definition. Either way it lands in
+    // nodePrompts → serialized (shown/edited in the UI) and rendered at run time
+    // when the node calls invokeAgent(values).
+    if (options.prompt) {
+      this.nodePrompts.set(name, options.prompt);
+    } else if (typeof nodeOrConfig?.prompt === 'string' && nodeOrConfig.prompt.trim()) {
+      this.nodePrompts.set(name, nodeOrConfig.prompt);
+    }
     if (Object.keys(options).length > 0) this.nodeOptions.set(name, options);
     return this;
   }
