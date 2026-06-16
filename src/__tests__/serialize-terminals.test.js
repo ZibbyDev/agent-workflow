@@ -28,25 +28,38 @@ describe('serialize() terminal nodes', () => {
     expect(hasEdge(ser, 'START', 'a')).toBe(true);
   });
 
-  it('adds an END sink node when any edge targets the END sentinel', () => {
-    const graph = new WorkflowGraph({ name: 'terminals-end' });
+  it('gives EACH terminating edge its OWN End node (BPMN multiple-end)', () => {
+    const graph = new WorkflowGraph({ name: 'multi-end' });
     graph.addNode('a', { name: 'a', _isCustomCode: true });
+    graph.addNode('b', { name: 'b', _isCustomCode: true });
     graph.setEntryPoint('a');
-    graph.addEdge('a', 'END');
+    // a branches: early-exit to END, or continue to b which also ends.
+    graph.addConditionalEdges('a', (s) => (s?.done ? 'END' : 'b'));
+    graph.addEdge('b', 'END');
 
     const ser = graph.serialize();
-    expect(nodeById(ser, 'END')?.type).toBe('end');
-    // The pre-existing edge to END is preserved and now lands on a real node.
-    expect(hasEdge(ser, 'a', 'END')).toBe(true);
+    const endNodes = ser.nodes.filter((n) => n.type === 'end');
+    // Two terminations → two distinct End nodes, no shared bottom sink.
+    expect(endNodes.length).toBe(2);
+    // No edge still points at the raw 'END' sentinel — each was rewired to a
+    // unique End node id.
+    expect(ser.edges.some((e) => e.target === 'END')).toBe(false);
+    endNodes.forEach((n) => {
+      expect(ser.edges.some((e) => e.target === n.id)).toBe(true);
+    });
   });
 
-  it('omits the END node when no edge terminates (still adds START)', () => {
-    const graph = new WorkflowGraph({ name: 'no-end' });
+  it('gives a leaf node (no outgoing edge) its own End so every path ends', () => {
+    // `a` is the last/only node and never routes to the END sentinel — it's a
+    // leaf. It should still get an End after it (every path visibly terminates).
+    const graph = new WorkflowGraph({ name: 'leaf-end' });
     graph.addNode('a', { name: 'a', _isCustomCode: true });
     graph.setEntryPoint('a');
 
     const ser = graph.serialize();
     expect(nodeById(ser, 'START')).toBeDefined();
-    expect(nodeById(ser, 'END')).toBeUndefined();
+    const endNodes = ser.nodes.filter((n) => n.type === 'end');
+    expect(endNodes.length).toBe(1);
+    expect(hasEdge(ser, 'a', endNodes[0].id)).toBe(true);
   });
 });

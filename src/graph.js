@@ -504,8 +504,35 @@ export class WorkflowGraph {
       nodes.unshift({ id: 'START', type: 'start', data: { nodeType: 'start', label: 'Start' } });
       edges.unshift({ source: 'START', target: this.entryPoint });
     }
-    if (edges.some((e) => e.target === 'END')) {
-      nodes.push({ id: 'END', type: 'end', data: { nodeType: 'end', label: 'End' } });
+    // Multiple END terminals (BPMN-style): give EACH terminating edge its OWN
+    // End node rather than funnelling every termination into one shared bottom
+    // sink. A single sink forces long edges that cut across the graph (e.g. an
+    // early-exit `fetch_issues → END` running past every node to the bottom);
+    // per-edge End nodes let the layout drop a short End right beside each
+    // source. Derived purely from the graph's END-targeting edges — no
+    // per-template declaration. Display-only: the runtime still routes on the
+    // single 'END' sentinel (this only rewrites the serialized view).
+    let endCount = 0;
+    for (const e of edges) {
+      if (e.target === 'END') {
+        endCount += 1;
+        const endId = `END__${endCount}`;
+        e.target = endId;
+        nodes.push({ id: endId, type: 'end', data: { nodeType: 'end', label: 'End' } });
+      }
+    }
+    // Leaf nodes (no outgoing edge) ALSO terminate the flow — e.g. a `finalize`
+    // node that's just the last step and never routes to the 'END' sentinel. Give
+    // each its own End sink too, so EVERY path visibly ends after its last node,
+    // not only the ones that explicitly route to END. Derived from the graph
+    // (a node absent from this.edges has no outgoing edge); display-only.
+    for (const nodeId of this.nodes.keys()) {
+      if (!this.edges.has(nodeId)) {
+        endCount += 1;
+        const endId = `END__${endCount}`;
+        nodes.push({ id: endId, type: 'end', data: { nodeType: 'end', label: 'End' } });
+        edges.push({ source: nodeId, target: endId });
+      }
     }
 
     const runtime    = this._runtimeSchema();

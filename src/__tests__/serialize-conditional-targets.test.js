@@ -26,7 +26,14 @@ function baseGraph() {
 }
 
 function conditionalEdgesFrom(serialized, source) {
-  return serialized.edges.filter((e) => e.source === source);
+  // These tests verify the conditional-target INFERENCE (which logical node ids
+  // a route function can return). serialize() additionally rewrites every
+  // terminating edge's target to a unique per-edge End node (`END__1`, `END__2`,
+  // … — BPMN multiple-end display), so normalize those back to the logical
+  // 'END' sentinel here; the inference is what's under test.
+  return serialized.edges
+    .filter((e) => e.source === source)
+    .map((e) => (/^END__\d+$/.test(e.target) ? { ...e, target: 'END' } : e));
 }
 
 describe('serialize() conditional target inference', () => {
