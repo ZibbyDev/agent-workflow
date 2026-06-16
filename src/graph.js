@@ -400,7 +400,13 @@ export class WorkflowGraph {
     const nodeConfigs = {};
 
     for (const [nodeId, node] of this.nodes) {
-      const nodeType = this.nodeTypeMap.get(nodeId) || nodeId;
+      // Display type. Single source of truth is the node's CLASS: a
+      // ConditionalNode renders as a 'decision' (the diamond/Condition box)
+      // automatically — no separate setNodeType('decision') needed. An
+      // explicit setNodeType() still wins as an override.
+      const nodeType =
+        this.nodeTypeMap.get(nodeId)
+        || (node instanceof ConditionalNode ? 'decision' : nodeId);
       nodes.push({ id: nodeId, type: nodeType, data: { nodeType, label: nodeId } });
 
       const config = {};
