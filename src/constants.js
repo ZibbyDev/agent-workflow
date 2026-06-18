@@ -58,14 +58,14 @@ export const SKILLS = {
   // the github-code-review review node). The id MUST match the skill's
   // registered id ('review-memory').
   REVIEW_MEMORY:    'review-memory',
-  // `agent-memory` — general-purpose per-agent persistent KV. Same backend
+  // `kv-memory` — general-purpose per-agent persistent KV. Same backend
   // route + DDB table as review-memory (Zibby's own backend POST
   // /credits/review-memory), but the skill AUTO-NAMESPACES every key by
   // WORKFLOW_TYPE so each agent (e.g. github-ai-scout vs github-code-review)
   // gets a disjoint key space in the same per-project partition — no manual
-  // scope-prefixing convention. Backed by agentMemorySkill in @zibby/skills.
-  // The id MUST match the skill's registered id ('agent-memory').
-  AGENT_MEMORY:     'agent-memory',
+  // scope-prefixing convention. Backed by kvMemorySkill in @zibby/skills.
+  // The id MUST match the skill's registered id ('kv-memory').
+  KV_MEMORY:        'kv-memory',
   RUNNER:           'runner',
   SKILL_INSTALLER:  'skill-installer',
   CORE_TOOLS:       'core-tools',
