@@ -51,16 +51,9 @@ export const SKILLS = {
   SENTRY:           'sentry',
   MEMORY:           'memory',
   CHAT_MEMORY:      'chat-memory',
-  // `review-memory` — per-PR (configurable-scope) review-note persist/recall.
-  // Backed by the reviewMemorySkill in @zibby/skills, which calls Zibby's own
-  // backend POST /memory/review. Declared here so SKILLS.REVIEW_MEMORY resolves
-  // in any consumer importing from @zibby/core or @zibby/agent-workflow (e.g.
-  // the github-code-review review node). The id MUST match the skill's
-  // registered id ('review-memory').
-  REVIEW_MEMORY:    'review-memory',
   // `kv-memory` — general-purpose per-agent persistent KV. Same backend
-  // route + DDB table as review-memory (Zibby's own backend POST
-  // /credits/review-memory), but the skill AUTO-NAMESPACES every key by
+  // route + DDB table that the (now-removed) review-memory skill used (Zibby's
+  // own backend POST /credits/review-memory), but the skill AUTO-NAMESPACES every key by
   // WORKFLOW_TYPE so each agent (e.g. github-ai-scout vs github-code-review)
   // gets a disjoint key space in the same per-project partition — no manual
   // scope-prefixing convention. Backed by kvMemorySkill in @zibby/skills.
