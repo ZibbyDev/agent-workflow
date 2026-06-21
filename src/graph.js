@@ -423,6 +423,21 @@ export class WorkflowGraph {
       if (node._isCustomCode && typeof node.execute === 'function') {
         config.customCode = node.execute.toString();
       }
+      // Human-readable, one-line node description authored on the node config
+      // (`addNode(id, { description: 'Clones the repo and …' })`). Display-only
+      // metadata for the graph view — the runtime never reads it. Whitelisted
+      // here so an arbitrary description string survives serialization into the
+      // graph the marketplace/pipeline API returns; without this the field is
+      // dropped and the graph caption falls back to the prompt summary.
+      const description =
+        (typeof node?.config?.description === 'string' && node.config.description.trim())
+          ? node.config.description
+          : (typeof node?.description === 'string' && node.description.trim())
+            ? node.description
+            : null;
+      if (description) {
+        config.description = description;
+      }
       const prompt = this.nodePrompts.get(nodeId);
       if (prompt) {
         // Declarative string prompt (Handlebars template) — editable in the UI.
