@@ -1109,10 +1109,30 @@ export class WorkflowGraph {
         });
       };
 
-      // Unified node-execution context. Spread state so nodes can destructure
-      // (`const { workspace } = context`); _coreInvokeAgent is the public
-      // injection point Node uses internally.
+      // Unified node-execution context. Spread state FIRST so nodes can
+      // destructure user keys (`const { workspace } = context`), then the
+      // framework props LAST so they always win and can never be clobbered by
+      // a user state key that happens to share a reserved name (e.g. a state
+      // key literally called `invokeAgent` or `nodeId`). User keys remain
+      // readable via `context.<key>`; only these 7 reserved names are
+      // protected. _coreInvokeAgent is the public injection point Node uses
+      // internally.
+      const _stateAll = state.getAll();
+
+      // Dev-time footgun warning: if a state key collides with a reserved
+      // framework prop, the framework prop now wins (it used to be silently
+      // shadowed). Warn once per node so the author knows to read the state
+      // value via context.state.get(...). Cheap: intersect over the small
+      // reserved set, not the whole state object.
+      const _reservedProps = ['state', 'invokeAgent', '_coreInvokeAgent', 'agent', 'nodeId', 'promptTemplate', 'getPromptTemplate'];
+      for (const _k of _reservedProps) {
+        if (Object.prototype.hasOwnProperty.call(_stateAll, _k)) {
+          console.warn(`[workflow] node "${currentNode}": state key "${_k}" is shadowed by the engine context prop; read it via context.state.get('${_k}')`);
+        }
+      }
+
       const nodeContext = {
+        ..._stateAll,
         state,
         invokeAgent,
         _coreInvokeAgent: boundInvokeAgent,
@@ -1120,7 +1140,6 @@ export class WorkflowGraph {
         nodeId: currentNode,
         promptTemplate,
         getPromptTemplate: () => promptTemplate,
-        ...state.getAll(),
       };
 
       try {
