@@ -33,6 +33,13 @@ export const SKILLS = {
   // Figma a REQUIRED integration (backend SKILL_INTEGRATION_MAP maps
   // 'figma' → INTEGRATIONS.FIGMA, gating deploy on a connected Figma).
   FIGMA:            'figma',
+  // `open-design` — design/deck authoring + export over the OpenDesign REST
+  // API (the Zibby-managed `open-design` app; the id equals the catalog
+  // appType). opendesignSkill in @zibby/skills resolves a { token, baseUrl }
+  // credential per-call via the backend (integration key 'open_design').
+  // OPTIONAL: unlike FIGMA, declaring SKILLS.OPEN_DESIGN does NOT gate deploy
+  // — the skill sets no requiresIntegration and is not in any required map.
+  OPEN_DESIGN:      'open-design',
   // `git` — provider-agnostic clone/list/explore tools. Auto-auths
   // against GitHub OR GitLab depending on which token the runner
   // injected. Use this on the workflow's first node so downstream
