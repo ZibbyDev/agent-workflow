@@ -256,11 +256,39 @@ export class WorkflowGraph {
    * The schema used at runtime to validate the FULL initial state object
    * passed into graph.run(). Derived from input+context if both are set
    * (the new model); otherwise the legacy stateSchema.
+   *
+   * Composition depends on the SHAPE of the input schema:
+   *   - z.object  → `inputSchema.merge(contextSchema)`. A flat object schema
+   *     exposes `.merge`, which produces a single object schema with the union
+   *     of both shapes. (Unchanged from the original behaviour.)
+   *   - z.discriminatedUnion / z.union → no `.merge` (a union has `.options`,
+   *     `_def.type === 'union'`). We compose with `z.intersection(input, ctx)`
+   *     (equivalently `inputSchema.and(contextSchema)`), which validates the
+   *     payload against the matching union VARIANT *and* against the context
+   *     object — so per-variant required fields (e.g. fix→instruction) are
+   *     enforced at runtime, and the context object's defaults are applied in
+   *     the parsed result. This is the agent-native multi-scenario shape
+   *     (e.g. sentry-triage's `z.discriminatedUnion('trigger', [...])`).
+   *
+   * Tolerant by design: if the input schema is neither shape we recognise, or
+   * composition throws for any reason, we fall back to the legacy stateSchema
+   * (or null) rather than crashing a run over a validation-wiring issue.
    */
   _runtimeSchema() {
     if (this.inputSchema && this.contextSchema) {
-      try { return this.inputSchema.merge(this.contextSchema); }
-      catch { /* fall through to legacy */ }
+      try {
+        // Object input: the original `.merge` path. Detected by the presence
+        // of `.merge` (a z.object method); unions don't have it.
+        if (typeof this.inputSchema.merge === 'function') {
+          return this.inputSchema.merge(this.contextSchema);
+        }
+        // Union input (discriminated or plain): compose via intersection so
+        // BOTH the matched variant and the context object are validated, and
+        // context defaults still apply to the parsed result.
+        if (typeof this.inputSchema.and === 'function') {
+          return this.inputSchema.and(this.contextSchema);
+        }
+      } catch { /* fall through to legacy */ }
     }
     if (this.inputSchema && !this.contextSchema) return this.inputSchema;
     return this.stateSchema;
