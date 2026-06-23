@@ -103,7 +103,35 @@ export const SKILLS = {
   // plane-mcp-server). Declared here for symmetry with the other trackers so
   // SKILLS.PLANE resolves in any consumer.
   PLANE:             'plane',
+  // `codebase-memory` — code-graph + semantic index over the checked-out repo
+  // (architecture map, dependency/call-path tracing, change detection). Backed
+  // by codebaseMemorySkill in @zibby/skills, which shells out to a binary BAKED
+  // INTO the agent image — NO integration/token required. It is a "no-connection
+  // toggleable skill": user-toggleable per-agent via the SAME enabledIntegrations
+  // allowlist as connect-required integrations (see
+  // NO_INTEGRATION_TOGGLEABLE_SKILL_IDS below + the strategy's allowlist gate),
+  // default ON. The id MUST match the skill's registered id ('codebase-memory').
+  CODEBASE_MEMORY:   'codebase-memory',
 };
+
+/**
+ * No-connection toggleable skills — skills that require NO integration/token
+ * (they run purely locally in the agent runtime) but are still USER-TOGGLEABLE
+ * per-agent, reusing the SAME `enabledIntegrations` allowlist that integration
+ * providers use. Default ON (absence of an allowlist = "everything on"); when the
+ * deployed workflow carries an explicit allowlist (surfaced to the runtime as the
+ * comma-separated WORKFLOW_ENABLED_INTEGRATIONS env), membership decides on/off,
+ * and the strategy's skill resolver SKIPS a non-member so its tools never load.
+ *
+ * Kept here (not in @zibby/skills) so the strategy can gate without coupling to
+ * any specific skill package. MUST stay in sync with the backend's
+ * NO_INTEGRATION_TOGGLEABLE_IDS (backend/src/services/skill-integrations.js) —
+ * the backend accepts these as valid allowlist ids + surfaces them in the
+ * /workflows/{uuid}/integrations/status feed.
+ */
+export const NO_INTEGRATION_TOGGLEABLE_SKILL_IDS = Object.freeze([
+  SKILLS.CODEBASE_MEMORY,
+]);
 
 /** CI env vars checked when generating session IDs. */
 export const CI_ENV_VARS = [

@@ -78,6 +78,7 @@ export { setLogger } from './logger.js';
 // Constants
 export {
   SKILLS,
+  NO_INTEGRATION_TOGGLEABLE_SKILL_IDS,
   DEFAULT_OUTPUT_BASE,
   SESSIONS_DIR,
   SESSION_INFO_FILE,
