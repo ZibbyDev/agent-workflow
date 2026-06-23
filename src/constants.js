@@ -47,6 +47,14 @@ export const SKILLS = {
   // SKILL_INTEGRATION_MAP renders this as "GitHub or GitLab" on the
   // marketplace card via the {any:[...]} group semantic.
   GIT:              'git',
+  // `git-write` — REQUIRED alias of `git`. Same provider-agnostic
+  // git_checkout/list/explore tools (gitWriteSkill in @zibby/skills is an
+  // alias of gitSkill), but repo-MUTATING agents (push a branch / open a
+  // PR / MR) declare THIS so the backend gates deploy on a connected repo.
+  // Backend's REQUIRED_INTEGRATION_MAP maps 'git-write' →
+  // {any:[github,gitlab]}, so the marketplace card renders "GitHub OR
+  // GitLab" as a HARD requirement (vs the soft, optional `git` nudge).
+  GIT_WRITE:        'git-write',
   SLACK:            'slack',
   LARK:             'lark',
   // `chat_notify` — provider-agnostic chat notification. Routes to
