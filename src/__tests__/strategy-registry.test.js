@@ -198,6 +198,40 @@ describe('strategy-registry', () => {
       expect(captured).toContain('PRIORITY OVERRIDE');
     });
 
+    it('injects custom prompt + resolves agent when state is a WorkflowState INSTANCE (getAll snapshot), not a plain object', async () => {
+      // Guards the state-normalization in invokeAgent: a node may pass the raw
+      // WorkflowState instance (data hidden in an internal store, reachable ONLY
+      // via getAll()) instead of a getAll() snapshot. Direct property reads
+      // (instance._currentNodeConfig / instance.agentType) are undefined on the
+      // instance, so WITHOUT normalization the custom prompt would silently drop
+      // AND agent selection would fail.
+      const { registerStrategy, invokeAgent } = await loadFreshRegistry();
+      let captured;
+      registerStrategy(
+        new FakeStrategy('alpha', {
+          invoke: async (prompt) => { captured = prompt; return 'ok'; },
+        })
+      );
+
+      const stateInstance = {
+        _store: {
+          agentType: 'alpha',
+          _currentNodeConfig: { extraPromptInstructions: 'OVERRIDE_VIA_INSTANCE' },
+        },
+        getAll() { return { ...this._store }; },
+      };
+      // Sanity: the override is NOT reachable by direct property access — exactly
+      // like the real WorkflowState class (data lives in this._state).
+      expect(stateInstance._currentNodeConfig).toBeUndefined();
+      expect(stateInstance.agentType).toBeUndefined();
+
+      await invokeAgent('base prompt', { state: stateInstance }, {});
+
+      expect(captured).toContain('base prompt');
+      expect(captured).toContain('OVERRIDE_VIA_INSTANCE');
+      expect(captured).toContain('PRIORITY OVERRIDE');
+    });
+
     it('resolves model from node-level models config first', async () => {
       const { registerStrategy, invokeAgent } = await loadFreshRegistry();
       let captured;

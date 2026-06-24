@@ -101,9 +101,22 @@ export function getAgentStrategy(context = {}) {
  * @returns {Promise<string | { raw: string, structured: object }>}
  */
 export async function invokeAgent(prompt, context = {}, options = {}) {
-  const strategy = getAgentStrategy(context);
+  // Normalize `state` to a plain snapshot view. A node may pass EITHER the
+  // WorkflowState INSTANCE or its getAll() snapshot. The reads below
+  // (agentType via getAgentStrategy, config, workspace, _currentNodeConfig) use
+  // direct property access, which only resolves on the snapshot — so a node
+  // that passed the raw instance would SILENTLY lose its custom prompt /
+  // config / agent selection. Normalize once here so both shapes behave
+  // identically (the per-node custom prompt must inject no matter how a node
+  // calls invokeAgent).
+  const stateView = context.state && typeof context.state.getAll === 'function'
+    ? context.state.getAll()
+    : (context.state || {});
+  const ctx = { ...context, state: stateView };
 
-  const config = context.state?.config || options.config || {};
+  const strategy = getAgentStrategy(ctx);
+
+  const config = stateView.config || options.config || {};
   const modelsConfig = config.models || {};
   const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
   const globalModel = modelsConfig.default || null;
@@ -113,7 +126,7 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
   const finalOptions = {
     ...options,
     model,
-    workspace: context.state?.workspace || options.workspace,
+    workspace: stateView.workspace || options.workspace,
     schema: options.schema || context.schema,
     images: options.images || context.images || [],
     skills: options.skills || context.skills || [],
@@ -135,7 +148,7 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     }
   }
 
-  const extraInstructions = context.state?._currentNodeConfig?.extraPromptInstructions?.trim();
+  const extraInstructions = stateView._currentNodeConfig?.extraPromptInstructions?.trim();
   if (extraInstructions) {
     enrichedPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIORITY OVERRIDE — THE FOLLOWING INSTRUCTIONS TAKE PRECEDENCE OVER ALL PREVIOUS CONTENT
