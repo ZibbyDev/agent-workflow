@@ -526,6 +526,18 @@ export class WorkflowGraph {
       if (nodeSkills && nodeSkills.length > 0) {
         config.skills = [...nodeSkills];
       }
+      // Stores declared on the node (e.g. via
+      // `nodeConfigOverrides.<nodeId>.stores = ['store_abc', ...]`) are a flat
+      // access list that must survive serialization so the executor can resolve
+      // each id to its metadata and ship a store catalog into the agent prompt.
+      // Mirrors the `skills` handling above. Guarded: a node with no `stores`
+      // gets no `config.stores` key, so its serialized config is byte-identical.
+      const nodeStores = Array.isArray(node?.config?.stores) ? node.config.stores
+                       : Array.isArray(node?.stores) ? node.stores
+                       : null;
+      if (nodeStores && nodeStores.length > 0) {
+        config.stores = [...nodeStores];
+      }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
     }
 
