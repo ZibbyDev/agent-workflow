@@ -148,6 +148,35 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     }
   }
 
+  // Store catalog — if this node declares `stores`, the executor resolves each
+  // id to `{id,type,description,schema,status}` and parks the array on
+  // `_currentNodeConfig.stores`. Render a compact catalog so the agent can pick
+  // a store BY DESCRIPTION and pass its storeId to the store tool. Kept in sync
+  // with @zibby/core/src/strategies/index.js — this is the invokeAgent the
+  // WORKFLOW ENGINE actually calls (core's copy only runs for direct @zibby/core
+  // invokeAgent callers), so the catalog MUST live here too or cloud workflow
+  // runs never see it. GUARDED: a node without resolved stores gets no block →
+  // prompt byte-identical.
+  const resolvedStores = stateView._currentNodeConfig?.stores;
+  if (Array.isArray(resolvedStores) && resolvedStores.length > 0
+      && typeof resolvedStores[0] === 'object') {
+    const includeSchema = resolvedStores.length <= 8;
+    const lines = resolvedStores.map(s => {
+      const id = s?.id ?? s?.storeId ?? '';
+      const type = s?.type ? ` · ${s.type}` : '';
+      const desc = (s?.description || '').toString().replace(/\s+/g, ' ').trim();
+      let line = `- ${id}${type} · ${desc || '(no description)'}`;
+      if (includeSchema && s?.schema && typeof s.schema === 'object') {
+        const props = s.schema.properties && typeof s.schema.properties === 'object'
+          ? Object.keys(s.schema.properties)
+          : Object.keys(s.schema);
+        if (props.length) line += `\n    fields: ${props.join(', ')}`;
+      }
+      return line;
+    });
+    enrichedPrompt += `\n\nAVAILABLE STORES (pick by description; pass the storeId to the store tool):\n${lines.join('\n')}`;
+  }
+
   const extraInstructions = stateView._currentNodeConfig?.extraPromptInstructions?.trim();
   if (extraInstructions) {
     enrichedPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

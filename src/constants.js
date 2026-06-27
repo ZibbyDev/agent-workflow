@@ -120,6 +120,16 @@ export const SKILLS = {
   // NO_INTEGRATION_TOGGLEABLE_SKILL_IDS below + the strategy's allowlist gate),
   // default ON. The id MUST match the skill's registered id ('codebase-memory').
   CODEBASE_MEMORY:   'codebase-memory',
+  // `dataset-store` — durable, queryable structured-record store (append rows
+  // now, run SQL-style aggregations later for reports). Backed by
+  // datasetStoreSkill in @zibby/skills; auths with the run's OWN project token
+  // (getSessionToken Bearer) → UNGATED, like kv-memory (intentionally absent
+  // from backend skill-integration maps). Opt-in: NOT alwaysLoad — activates
+  // ONLY when a node declares it via skills:[...], so existing agents are
+  // unaffected. Declared here so SKILLS.DATASET_STORE resolves in any consumer
+  // importing from @zibby/core or @zibby/agent-workflow. The id MUST match the
+  // skill's registered id ('dataset-store').
+  DATASET_STORE:    'dataset-store',
 };
 
 /**
