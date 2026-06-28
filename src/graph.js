@@ -526,17 +526,26 @@ export class WorkflowGraph {
       if (nodeSkills && nodeSkills.length > 0) {
         config.skills = [...nodeSkills];
       }
-      // Stores declared on the node (e.g. via
-      // `nodeConfigOverrides.<nodeId>.stores = ['store_abc', ...]`) are a flat
-      // access list that must survive serialization so the executor can resolve
-      // each id to its metadata and ship a store catalog into the agent prompt.
-      // Mirrors the `skills` handling above. Guarded: a node with no `stores`
-      // gets no `config.stores` key, so its serialized config is byte-identical.
+      // Stores DECLARED on the node (Stores v2 contract) are objects:
+      //   stores: [{ name, description }, ...]
+      // where `name` matches ^[a-z][a-z0-9_]{0,40}$ (forms an env-key suffix)
+      // and is UNIQUE within the workflow. These declarations must survive
+      // serialization (graphPreview / nodeConfigs) so the BACKEND can, at deploy,
+      // auto-provision a store per declaration (idempotency key
+      // `${workflowUuid}:${nodeName}:${storeName}`) and inject
+      // `ZIBBY_STORE__<name>=<storeId>` env for the runtime skill to resolve.
+      // Mirrors the `skills` handling above. We pass the OBJECT form through
+      // unchanged (a legacy string[] of ids is also tolerated → passed through),
+      // shallow-cloning each object so the serialized graph never aliases live
+      // node config. Guarded: a node with no `stores` gets no `config.stores`
+      // key, so its serialized config is byte-identical to before.
       const nodeStores = Array.isArray(node?.config?.stores) ? node.config.stores
                        : Array.isArray(node?.stores) ? node.stores
                        : null;
       if (nodeStores && nodeStores.length > 0) {
-        config.stores = [...nodeStores];
+        config.stores = nodeStores.map(s =>
+          (s && typeof s === 'object') ? { ...s } : s
+        );
       }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
     }

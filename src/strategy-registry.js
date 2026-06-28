@@ -148,14 +148,18 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     }
   }
 
-  // Store catalog — if this node declares `stores`, the executor resolves each
-  // id to `{id,type,description,schema,status}` and parks the array on
-  // `_currentNodeConfig.stores`. Render a compact catalog so the agent can pick
-  // a store BY DESCRIPTION and pass its storeId to the store tool. Kept in sync
-  // with @zibby/core/src/strategies/index.js — this is the invokeAgent the
-  // WORKFLOW ENGINE actually calls (core's copy only runs for direct @zibby/core
-  // invokeAgent callers), so the catalog MUST live here too or cloud workflow
-  // runs never see it. GUARDED: a node without resolved stores gets no block →
+  // Store catalog (Stores v2) — if this node declares `stores`, the BACKEND
+  // resolves each declaration and parks the resolved metadata array on
+  // `_currentNodeConfig.stores` as `[{ name, id, description, type?, schema? }]`.
+  // The `name` is the HANDLE the agent passes to the store tool
+  // (dataset_append / dataset_query); `id` is the underlying storeId the runtime
+  // skill maps to via `ZIBBY_STORE__<name>=<storeId>` env. Render a compact
+  // catalog so the agent picks a store BY DESCRIPTION and passes its NAME.
+  // Kept in sync with @zibby/core/src/strategies/index.js — this is the
+  // invokeAgent the WORKFLOW ENGINE actually calls (core's copy only runs for
+  // direct @zibby/core invokeAgent callers), so the catalog MUST live here too
+  // or cloud workflow runs never see it. (If you change the format here, mirror
+  // it in core's copy.) GUARDED: a node without resolved stores gets no block →
   // prompt byte-identical.
   const resolvedStores = stateView._currentNodeConfig?.stores;
   if (Array.isArray(resolvedStores) && resolvedStores.length > 0
@@ -163,9 +167,12 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     const includeSchema = resolvedStores.length <= 8;
     const lines = resolvedStores.map(s => {
       const id = s?.id ?? s?.storeId ?? '';
-      const type = s?.type ? ` · ${s.type}` : '';
+      // Prefer the declared `name` handle; fall back to the id for legacy
+      // (pre-v2) resolved stores that have no name.
+      const handle = (s?.name ?? '').toString().trim() || id;
+      const type = s?.type ? `  ·  ${s.type}` : '';
       const desc = (s?.description || '').toString().replace(/\s+/g, ' ').trim();
-      let line = `- ${id}${type} · ${desc || '(no description)'}`;
+      let line = `- ${handle}  ·  ${desc || '(no description)'}${type}   (id: ${id})`;
       if (includeSchema && s?.schema && typeof s.schema === 'object') {
         const props = s.schema.properties && typeof s.schema.properties === 'object'
           ? Object.keys(s.schema.properties)
@@ -174,7 +181,7 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
       }
       return line;
     });
-    enrichedPrompt += `\n\nAVAILABLE STORES (pick by description; pass the storeId to the store tool):\n${lines.join('\n')}`;
+    enrichedPrompt += `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`;
   }
 
   const extraInstructions = stateView._currentNodeConfig?.extraPromptInstructions?.trim();

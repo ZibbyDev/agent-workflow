@@ -65,6 +65,9 @@ export { registerSkill, getSkill, hasSkill, getAllSkills, listSkillIds, clearSki
 // Tool resolution
 export { resolveNodeTools, getResolvedToolDefinitions, NODE_DEFAULT_TOOLS } from './tool-resolver.js';
 
+// Stores v2 — declaration helpers (validate node `stores: [{name, description}]`)
+export { validateStoreDefs, STORE_NAME_REGEX } from './stores.js';
+
 // Agent strategy system
 export { AgentStrategy } from './agents/base.js';
 export { registerStrategy, listStrategies, getAgentStrategy, invokeAgent } from './strategy-registry.js';
