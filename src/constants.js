@@ -130,6 +130,25 @@ export const SKILLS = {
   // importing from @zibby/core or @zibby/agent-workflow. The id MUST match the
   // skill's registered id ('dataset-store').
   DATASET_STORE:    'dataset-store',
+  // `linkedin` — publish to the connected PERSONAL LinkedIn profile
+  // (linkedinSkill in @zibby/skills → linkedin_publish_post). Declared here so
+  // SKILLS.LINKEDIN resolves in any consumer importing from @zibby/core or
+  // @zibby/agent-workflow (mirrors the id already present in @zibby/skills'
+  // own SKILLS map). The id MUST match the skill's registered id ('linkedin').
+  LINKEDIN:         'linkedin',
+  // `circleci` — INTEGRATION-GATE MARKER, not a runtime MCP skill: no skill
+  // object registers under this id (the runtime tool-resolver warns + skips
+  // it). Declaring it on a node's `skills` makes the backend's
+  // REQUIRED_INTEGRATION_MAP gate deploy on a connected CircleCI (the
+  // flaky-test-fixer pattern — its node resolves the CircleCI token
+  // deterministically, no LLM tools involved).
+  CIRCLECI:         'circleci',
+  // `trigger-agent` — the agent-callable `trigger_agent` MCP tool
+  // (triggerAgentSkill in @zibby/skills): fire another Zibby workflow/agent
+  // run in this project (fire-and-forget, returns the executionId). Declares
+  // no requiresIntegration → never gates deploy. The id MUST match the
+  // skill's registered id ('trigger-agent').
+  TRIGGER_AGENT:    'trigger-agent',
 };
 
 /**
