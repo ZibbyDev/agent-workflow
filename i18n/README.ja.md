@@ -43,22 +43,22 @@ graph
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 毎回 `npx` する代わりに一度だけインストールしたい場合:
@@ -72,25 +72,23 @@ zibby --help
 
 ## CLI: ワークフローの完全なライフサイクル
 
-すべてのワークフロー操作は一貫性のために `zibby workflow <verb>` の下にまとめられています。トップレベルの素の形式（`zibby start`、`zibby deploy`、`zibby trigger`、`zibby logs`）は後方互換のエイリアスとして維持されています。
+すべてのワークフロー操作は一貫性のために `zibby agent <verb>` の下にまとめられています。トップレベルの素の形式（`zibby start`、`zibby deploy`、`zibby trigger`、`zibby logs`）は後方互換のエイリアスとして維持されています。
 
 | コマンド | 何をするか |
 |---|---|
-| `zibby workflow new <name>` | `.zibby/workflows/<name>/` の下に新しいカスタムワークフローを**生成**します。`.zibby/` がなければ自動作成します — 別途の init 手順は不要です。 |
-| `zibby workflow start <name>` | ワークフローをホットリロード付きで**ローカル**実行します（デフォルトでポート 3848）。Name = `.zibby/workflows/` の下のフォルダ。 |
+| `zibby agent new <name>` | `.zibby/workflows/<name>/` の下に新しいカスタムワークフローを**生成**します。`.zibby/` がなければ自動作成します — 別途の init 手順は不要です。 |
+| `zibby agent start <name>` | ワークフローをホットリロード付きで**ローカル**実行します（デフォルトでポート 3848）。Name = `.zibby/workflows/` の下のフォルダ。 |
 | `zibby login` / `logout` / `status` | クラウド認証。 |
-| `zibby workflow deploy [name]` | ワークフローを Zibby Cloud に**デプロイ**します（name を省略すると対話的ピッカー）。 |
-| `zibby workflow trigger <uuid>` | デプロイ済みワークフローをクラウドで**実行**します。UUID が正準です（名前はローカル限定）。UUID は `workflow list` または `deploy` の出力から取得します。 |
-| `zibby workflow logs [jobId] -t` | 実行の**ログ**を Heroku 風に tail します。`-t` でライブに追従します。 |
-| `zibby workflow list` | ローカル + デプロイ済みのワークフローを**一覧表示**します。 |
-| `zibby workflow download <uuid>` | デプロイ済みワークフローをローカルへ**取得**します — 編集して再デプロイ。 |
-| `zibby workflow delete <uuid>` | デプロイ済みワークフローを**削除**します。 |
+| `zibby agent deploy [name]` | ワークフローを Zibby Cloud に**デプロイ**します（name を省略すると対話的ピッカー）。 |
+| `zibby agent trigger <uuid>` | デプロイ済みワークフローをクラウドで**実行**します。UUID が正準です（名前はローカル限定）。UUID は `agent list` または `deploy` の出力から取得します。 |
+| `zibby agent logs [jobId] -t` | 実行の**ログ**を Heroku 風に tail します。`-t` でライブに追従します。 |
+| `zibby agent list` | ローカル + デプロイ済みのワークフローを**一覧表示**します。 |
+| `zibby agent download <uuid>` | デプロイ済みワークフローをローカルへ**取得**します — 編集して再デプロイ。 |
+| `zibby agent delete <uuid>` | デプロイ済みワークフローを**削除**します。 |
 
 **ローカル**実行は `.zibby/output/sessions/<id>/` に着地し、生の出力、パース済み JSON、そして JSONL の実行ログを残します — リプレイに適しています。**クラウド**実行は同じオンディスク形式を使い、trigger/logs コマンドで前面化されます。
 
-**ローカル vs クラウドのアイデンティティ**: ワークフローのフォルダ名（`my-pipeline`）は*ローカル*です — `workflow new`、`workflow start`、`workflow deploy` で使われます。クラウドワークフローは **UUID** で識別されます — `workflow trigger`、`workflow logs`、`workflow download`、`workflow delete` で使われます。最初の `deploy` の後、UUID は `.zibby/workflows/<name>/.zibby-deploy.json` にキャッシュされます（共同作業者が同じ正準の参照を共有できるよう git にコミットしてください）。
-
-CLI は [Zibby Studio](https://zibby.dev) とも統合します — ライブ実行の可視化、セッションのピン留め、ボタンからのワークフロー停止を行うデスクトップ UI です。
+**ローカル vs クラウドのアイデンティティ**: ワークフローのフォルダ名（`my-pipeline`）は*ローカル*です — `agent new`、`agent start`、`agent deploy` で使われます。クラウドワークフローは **UUID** で識別されます — `agent trigger`、`agent logs`、`agent download`、`agent delete` で使われます。最初の `deploy` の後、UUID は `.zibby/workflows/<name>/.zibby-deploy.json` にキャッシュされます（共同作業者が同じ正準の参照を共有できるよう git にコミットしてください）。
 
 > 📋 **完全な CLI チートシート** には `zibby init`、`zibby template list/add`、`zibby memory remote/cost/pull/push`（UI エージェントメモリ + チーム同期）、そして `zibby test` が含まれ、[`@zibby/cli` の README](https://www.npmjs.com/package/@zibby/cli) にあります。上記のワークフローコマンドはエンジン関連のサブセットです。
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ Claude Code + Cursor + Codex を、それらの間の構造化されたハンド
 
 | プリミティブ | 何をするか |
 |---|---|
-| `WorkflowGraph` | DAG。`addNode`、`addEdge`、`addConditionalEdges`、`setEntryPoint`。 |
+| `Graph` | DAG。`addNode`、`addEdge`、`addConditionalEdges`、`setEntryPoint`。 |
 | `Node` | 1 回のエージェント呼び出し。設定: `prompt`、`outputSchema`（Zod）、オプションの `agent`、`retries`、`skills`。 |
 | サブグラフノード | `addNode(name, { workflow: 'other-name', ... })` — 別のデプロイ済みワークフローを子としてディスパッチします。同期（ポーリング + マージ）または非同期（`async: true`、撃ちっぱなし）。下記の [サブグラフ](#サブグラフ) を参照。 |
 | `AgentStrategy` | 抽象基底クラス。`canHandle(ctx)` と `invoke(prompt, opts)` を実装します。 |

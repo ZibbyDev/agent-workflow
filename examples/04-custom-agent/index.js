@@ -10,7 +10,7 @@
  * Run: `OPENAI_API_KEY=... node index.js`
  */
 
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
 import { z } from 'zod';
 
 class OpenAIChatStrategy extends AgentStrategy {
@@ -62,7 +62,7 @@ const Haiku = z.object({
   haiku: z.string().describe('A 5-7-5 syllable haiku as one string'),
 });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('write', {
     prompt: 'Write a haiku about graph workflows. Return JSON {"haiku": "..."}.',
     outputSchema: Haiku,

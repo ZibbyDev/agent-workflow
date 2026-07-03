@@ -43,22 +43,22 @@ No setup step. The first command bootstraps `.zibby/workflows/` for you.
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 Prefer to install once instead of `npx` every time:
@@ -72,25 +72,23 @@ zibby --help
 
 ## The CLI: full workflow lifecycle
 
-All workflow operations live under `zibby workflow <verb>` for consistency. The bare top-level forms (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) are kept as backward-compat aliases.
+All workflow operations live under `zibby agent <verb>` for consistency. The bare top-level forms (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) are kept as backward-compat aliases.
 
 | Command | What it does |
 |---|---|
-| `zibby workflow new <name>` | **Generate** a new custom workflow under `.zibby/workflows/<name>/`. Auto-creates `.zibby/` if missing — no separate init step required. |
-| `zibby workflow start <name>` | Run a workflow **locally** with hot-reload (defaults to port 3848). Name = folder under `.zibby/workflows/`. |
+| `zibby agent new <name>` | **Generate** a new custom workflow under `.zibby/workflows/<name>/`. Auto-creates `.zibby/` if missing — no separate init step required. |
+| `zibby agent start <name>` | Run a workflow **locally** with hot-reload (defaults to port 3848). Name = folder under `.zibby/workflows/`. |
 | `zibby login` / `logout` / `status` | Cloud auth. |
-| `zibby workflow deploy [name]` | **Deploy** a workflow to Zibby Cloud (interactive picker if name omitted). |
-| `zibby workflow trigger <uuid>` | **Run** a deployed workflow in the cloud. UUID is canonical (names are local-only). Get UUIDs from `workflow list` or the `deploy` output. |
-| `zibby workflow logs [jobId] -t` | Tail **logs** from a run, Heroku-style. `-t` to follow live. |
-| `zibby workflow list` | **List** local + deployed workflows. |
-| `zibby workflow download <uuid>` | **Pull** a deployed workflow back to local — edit + redeploy. |
-| `zibby workflow delete <uuid>` | **Delete** a deployed workflow. |
+| `zibby agent deploy [name]` | **Deploy** a workflow to Zibby Cloud (interactive picker if name omitted). |
+| `zibby agent trigger <uuid>` | **Run** a deployed workflow in the cloud. UUID is canonical (names are local-only). Get UUIDs from `agent list` or the `deploy` output. |
+| `zibby agent logs [jobId] -t` | Tail **logs** from a run, Heroku-style. `-t` to follow live. |
+| `zibby agent list` | **List** local + deployed workflows. |
+| `zibby agent download <uuid>` | **Pull** a deployed workflow back to local — edit + redeploy. |
+| `zibby agent delete <uuid>` | **Delete** a deployed workflow. |
 
 **Local** runs land in `.zibby/output/sessions/<id>/` with raw outputs, parsed JSON, and a JSONL execution log — replay-friendly. **Cloud** runs use the same on-disk format, fronted by the trigger/logs commands.
 
-**Local vs cloud identity**: workflow folder names (`my-pipeline`) are *local* — used by `workflow new`, `workflow start`, `workflow deploy`. Cloud workflows are identified by **UUID** — used by `workflow trigger`, `workflow logs`, `workflow download`, `workflow delete`. After your first `deploy`, the UUID is cached in `.zibby/workflows/<name>/.zibby-deploy.json` (commit it to git so collaborators share the same canonical reference).
-
-The CLI also integrates with [Zibby Studio](https://zibby.dev) — a desktop UI for visualising live runs, pinning sessions, and stopping a workflow from a button.
+**Local vs cloud identity**: workflow folder names (`my-pipeline`) are *local* — used by `agent new`, `agent start`, `agent deploy`. Cloud workflows are identified by **UUID** — used by `agent trigger`, `agent logs`, `agent download`, `agent delete`. After your first `deploy`, the UUID is cached in `.zibby/workflows/<name>/.zibby-deploy.json` (commit it to git so collaborators share the same canonical reference).
 
 > 📋 **Full CLI cheat sheet** including `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push` (UI agent memory + team sync), and `zibby test` is in [`@zibby/cli`'s README](https://www.npmjs.com/package/@zibby/cli). Workflow commands above are the engine-relevant subset.
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ If you want to compose Claude Code + Cursor + Codex into one pipeline with struc
 
 | Primitive | What it does |
 |---|---|
-| `WorkflowGraph` | The DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
+| `Graph` | The DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
 | `Node` | One agent invocation. Config: `prompt`, `outputSchema` (Zod), optional `agent`, `retries`, `skills`. |
 | Sub-graph node | `addNode(name, { workflow: 'other-name', ... })` — dispatches another deployed workflow as a child. Sync (poll + merge) or async (`async: true`, fire-and-forget). See [Sub-graphs](#sub-graphs) below. |
 | `AgentStrategy` | Abstract base. Implement `canHandle(ctx)` and `invoke(prompt, opts)`. |

@@ -5,7 +5,7 @@
  * Run: `node index.js`
  */
 
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
 import { z } from 'zod';
 
 // ── 1. Bring your own agent ──────────────────────────────────────────────
@@ -23,7 +23,7 @@ registerStrategy(new FakeAgent());
 // ── 2. Define the graph ─────────────────────────────────────────────────
 const Greeting = z.object({ greeting: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('say_hi', { prompt: 'Say hi.', outputSchema: Greeting })
   .setEntryPoint('say_hi');
 

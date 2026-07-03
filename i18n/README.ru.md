@@ -43,22 +43,22 @@ graph
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 Предпочитаете установить один раз вместо постоянного `npx`:
@@ -72,25 +72,23 @@ zibby --help
 
 ## CLI: полный жизненный цикл рабочего процесса
 
-Все операции с рабочими процессами для единообразия располагаются под `zibby workflow <verb>`. Краткие формы верхнего уровня (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) сохранены как псевдонимы для обратной совместимости.
+Все операции с рабочими процессами для единообразия располагаются под `zibby agent <verb>`. Краткие формы верхнего уровня (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) сохранены как псевдонимы для обратной совместимости.
 
 | Команда | Что делает |
 |---|---|
-| `zibby workflow new <name>` | **Генерирует** новый пользовательский рабочий процесс в `.zibby/workflows/<name>/`. Автоматически создаёт `.zibby/`, если он отсутствует, — отдельный шаг инициализации не требуется. |
-| `zibby workflow start <name>` | Запускает рабочий процесс **локально** с горячей перезагрузкой (по умолчанию порт 3848). Имя = папка внутри `.zibby/workflows/`. |
+| `zibby agent new <name>` | **Генерирует** новый пользовательский рабочий процесс в `.zibby/workflows/<name>/`. Автоматически создаёт `.zibby/`, если он отсутствует, — отдельный шаг инициализации не требуется. |
+| `zibby agent start <name>` | Запускает рабочий процесс **локально** с горячей перезагрузкой (по умолчанию порт 3848). Имя = папка внутри `.zibby/workflows/`. |
 | `zibby login` / `logout` / `status` | Облачная аутентификация. |
-| `zibby workflow deploy [name]` | **Развёртывает** рабочий процесс в Zibby Cloud (интерактивный выбор, если имя опущено). |
-| `zibby workflow trigger <uuid>` | **Запускает** развёрнутый рабочий процесс в облаке. UUID каноничен (имена существуют только локально). Получайте UUID из `workflow list` или из вывода `deploy`. |
-| `zibby workflow logs [jobId] -t` | Выводит **логи** запуска в стиле Heroku. `-t` — следить в реальном времени. |
-| `zibby workflow list` | **Список** локальных и развёрнутых рабочих процессов. |
-| `zibby workflow download <uuid>` | **Загружает** развёрнутый рабочий процесс обратно локально — правьте и развёртывайте снова. |
-| `zibby workflow delete <uuid>` | **Удаляет** развёрнутый рабочий процесс. |
+| `zibby agent deploy [name]` | **Развёртывает** рабочий процесс в Zibby Cloud (интерактивный выбор, если имя опущено). |
+| `zibby agent trigger <uuid>` | **Запускает** развёрнутый рабочий процесс в облаке. UUID каноничен (имена существуют только локально). Получайте UUID из `agent list` или из вывода `deploy`. |
+| `zibby agent logs [jobId] -t` | Выводит **логи** запуска в стиле Heroku. `-t` — следить в реальном времени. |
+| `zibby agent list` | **Список** локальных и развёрнутых рабочих процессов. |
+| `zibby agent download <uuid>` | **Загружает** развёрнутый рабочий процесс обратно локально — правьте и развёртывайте снова. |
+| `zibby agent delete <uuid>` | **Удаляет** развёрнутый рабочий процесс. |
 
 **Локальные** запуски попадают в `.zibby/output/sessions/<id>/` с исходными выводами, разобранным JSON и журналом выполнения в формате JSONL — удобно для воспроизведения. **Облачные** запуски используют тот же формат на диске, доступный через команды trigger/logs.
 
-**Локальная и облачная идентичность**: имена папок рабочих процессов (`my-pipeline`) — *локальные*, используются командами `workflow new`, `workflow start`, `workflow deploy`. Облачные рабочие процессы идентифицируются по **UUID** — используются командами `workflow trigger`, `workflow logs`, `workflow download`, `workflow delete`. После первого `deploy` UUID кэшируется в `.zibby/workflows/<name>/.zibby-deploy.json` (закоммитьте его в git, чтобы коллеги использовали один и тот же канонический идентификатор).
-
-CLI также интегрируется с [Zibby Studio](https://zibby.dev) — настольным интерфейсом для визуализации текущих запусков, закрепления сессий и остановки рабочего процесса одной кнопкой.
+**Локальная и облачная идентичность**: имена папок рабочих процессов (`my-pipeline`) — *локальные*, используются командами `agent new`, `agent start`, `agent deploy`. Облачные рабочие процессы идентифицируются по **UUID** — используются командами `agent trigger`, `agent logs`, `agent download`, `agent delete`. После первого `deploy` UUID кэшируется в `.zibby/workflows/<name>/.zibby-deploy.json` (закоммитьте его в git, чтобы коллеги использовали один и тот же канонический идентификатор).
 
 > 📋 **Полная шпаргалка по CLI**, включая `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push` (память агента UI + командная синхронизация) и `zibby test`, находится в [README пакета `@zibby/cli`](https://www.npmjs.com/package/@zibby/cli). Команды workflow выше — это подмножество, относящееся к движку.
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ console.log(state.finish.summary);
 
 | Примитив | Что делает |
 |---|---|
-| `WorkflowGraph` | Граф (DAG). `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
+| `Graph` | Граф (DAG). `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
 | `Node` | Один вызов агента. Конфигурация: `prompt`, `outputSchema` (Zod), необязательные `agent`, `retries`, `skills`. |
 | Узел-подграф | `addNode(name, { workflow: 'other-name', ... })` — диспетчеризует другой развёрнутый рабочий процесс как дочерний. Синхронно (опрос + слияние) или асинхронно (`async: true`, запуск без ожидания). См. [Подграфы](#подграфы) ниже. |
 | `AgentStrategy` | Абстрактная база. Реализуйте `canHandle(ctx)` и `invoke(prompt, opts)`. |

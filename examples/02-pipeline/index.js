@@ -8,7 +8,7 @@
  * Run: `node index.js`
  */
 
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
 import { z } from 'zod';
 
 // A scripted agent: returns canned structured output per node, so we can
@@ -32,7 +32,7 @@ const Plan    = z.object({ tasks:     z.array(z.string()) });
 const Result  = z.object({ completed: z.array(z.string()) });
 const Summary = z.object({ summary:   z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',    { prompt: 'Break down the goal',     outputSchema: Plan })
   // Dynamic prompt — reads previous node's output from state.
   .addNode('execute', {

@@ -43,22 +43,22 @@ graph
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 如果你更愿意安装一次，而不是每次都用 `npx`：
@@ -72,25 +72,23 @@ zibby --help
 
 ## CLI：完整的工作流生命周期
 
-为保持一致性，所有工作流操作都归于 `zibby workflow <verb>` 之下。顶层的简写形式（`zibby start`、`zibby deploy`、`zibby trigger`、`zibby logs`）作为向后兼容的别名保留。
+为保持一致性，所有工作流操作都归于 `zibby agent <verb>` 之下。顶层的简写形式（`zibby start`、`zibby deploy`、`zibby trigger`、`zibby logs`）作为向后兼容的别名保留。
 
 | 命令 | 作用 |
 |---|---|
-| `zibby workflow new <name>` | 在 `.zibby/workflows/<name>/` 下**生成**一个新的自定义工作流。如果 `.zibby/` 不存在则自动创建——无需单独的初始化步骤。 |
-| `zibby workflow start <name>` | 以热重载方式**本地**运行工作流（默认端口 3848）。名称 = `.zibby/workflows/` 下的文件夹。 |
+| `zibby agent new <name>` | 在 `.zibby/workflows/<name>/` 下**生成**一个新的自定义工作流。如果 `.zibby/` 不存在则自动创建——无需单独的初始化步骤。 |
+| `zibby agent start <name>` | 以热重载方式**本地**运行工作流（默认端口 3848）。名称 = `.zibby/workflows/` 下的文件夹。 |
 | `zibby login` / `logout` / `status` | 云端认证。 |
-| `zibby workflow deploy [name]` | 将工作流**部署**到 Zibby Cloud（省略名称时进入交互式选择器）。 |
-| `zibby workflow trigger <uuid>` | 在云端**运行**已部署的工作流。UUID 是规范标识（名称仅限本地）。可从 `workflow list` 或 `deploy` 的输出中获取 UUID。 |
-| `zibby workflow logs [jobId] -t` | 以 Heroku 风格输出某次运行的**日志**。`-t` 表示实时跟随。 |
-| `zibby workflow list` | **列出**本地 + 已部署的工作流。 |
-| `zibby workflow download <uuid>` | 将已部署的工作流**拉回**本地——编辑并重新部署。 |
-| `zibby workflow delete <uuid>` | **删除**已部署的工作流。 |
+| `zibby agent deploy [name]` | 将工作流**部署**到 Zibby Cloud（省略名称时进入交互式选择器）。 |
+| `zibby agent trigger <uuid>` | 在云端**运行**已部署的工作流。UUID 是规范标识（名称仅限本地）。可从 `agent list` 或 `deploy` 的输出中获取 UUID。 |
+| `zibby agent logs [jobId] -t` | 以 Heroku 风格输出某次运行的**日志**。`-t` 表示实时跟随。 |
+| `zibby agent list` | **列出**本地 + 已部署的工作流。 |
+| `zibby agent download <uuid>` | 将已部署的工作流**拉回**本地——编辑并重新部署。 |
+| `zibby agent delete <uuid>` | **删除**已部署的工作流。 |
 
 **本地**运行会落到 `.zibby/output/sessions/<id>/`，包含原始输出、解析后的 JSON 和一份 JSONL 执行日志——便于回放。**云端**运行使用相同的磁盘格式，通过 trigger/logs 命令对外提供。
 
-**本地与云端标识**：工作流文件夹名称（`my-pipeline`）是*本地的*——由 `workflow new`、`workflow start`、`workflow deploy` 使用。云端工作流通过 **UUID** 标识——由 `workflow trigger`、`workflow logs`、`workflow download`、`workflow delete` 使用。首次 `deploy` 后，UUID 会缓存到 `.zibby/workflows/<name>/.zibby-deploy.json`（请将其提交到 git，以便协作者共享同一个规范引用）。
-
-CLI 还与 [Zibby Studio](https://zibby.dev) 集成——一个桌面 UI，用于可视化实时运行、固定会话，以及通过按钮停止工作流。
+**本地与云端标识**：工作流文件夹名称（`my-pipeline`）是*本地的*——由 `agent new`、`agent start`、`agent deploy` 使用。云端工作流通过 **UUID** 标识——由 `agent trigger`、`agent logs`、`agent download`、`agent delete` 使用。首次 `deploy` 后，UUID 会缓存到 `.zibby/workflows/<name>/.zibby-deploy.json`（请将其提交到 git，以便协作者共享同一个规范引用）。
 
 > 📋 **完整的 CLI 速查表**，包括 `zibby init`、`zibby template list/add`、`zibby memory remote/cost/pull/push`（UI 代理记忆 + 团队同步）以及 `zibby test`，参见 [`@zibby/cli` 的 README](https://www.npmjs.com/package/@zibby/cli)。上面的 workflow 命令是与引擎相关的子集。
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ console.log(state.finish.summary);
 
 | 原语 | 作用 |
 |---|---|
-| `WorkflowGraph` | 有向无环图（DAG）。`addNode`、`addEdge`、`addConditionalEdges`、`setEntryPoint`。 |
+| `Graph` | 有向无环图（DAG）。`addNode`、`addEdge`、`addConditionalEdges`、`setEntryPoint`。 |
 | `Node` | 一次代理调用。配置：`prompt`、`outputSchema`（Zod）、可选的 `agent`、`retries`、`skills`。 |
 | 子图节点 | `addNode(name, { workflow: 'other-name', ... })` —— 将另一个已部署的工作流作为子项进行调度。同步（轮询 + 合并）或异步（`async: true`，发送即不管）。参见下文[子图](#子图)。 |
 | `AgentStrategy` | 抽象基类。实现 `canHandle(ctx)` 和 `invoke(prompt, opts)`。 |

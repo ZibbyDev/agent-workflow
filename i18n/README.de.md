@@ -43,22 +43,22 @@ Kein Setup-Schritt. Der erste Befehl bootstrappt `.zibby/workflows/` für dich.
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 Lieber einmal installieren, statt jedes Mal `npx` zu nutzen:
@@ -72,25 +72,23 @@ zibby --help
 
 ## Die CLI: der vollständige Workflow-Lebenszyklus
 
-Alle Workflow-Operationen liegen aus Konsistenzgründen unter `zibby workflow <verb>`. Die nackten Top-Level-Formen (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) bleiben als abwärtskompatible Aliase erhalten.
+Alle Workflow-Operationen liegen aus Konsistenzgründen unter `zibby agent <verb>`. Die nackten Top-Level-Formen (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) bleiben als abwärtskompatible Aliase erhalten.
 
 | Befehl | Was er tut |
 |---|---|
-| `zibby workflow new <name>` | **Generiert** einen neuen benutzerdefinierten Workflow unter `.zibby/workflows/<name>/`. Legt `.zibby/` automatisch an, falls es fehlt — kein separater Init-Schritt erforderlich. |
-| `zibby workflow start <name>` | Führt einen Workflow **lokal** mit Hot-Reload aus (Standard-Port 3848). Name = Ordner unter `.zibby/workflows/`. |
+| `zibby agent new <name>` | **Generiert** einen neuen benutzerdefinierten Workflow unter `.zibby/workflows/<name>/`. Legt `.zibby/` automatisch an, falls es fehlt — kein separater Init-Schritt erforderlich. |
+| `zibby agent start <name>` | Führt einen Workflow **lokal** mit Hot-Reload aus (Standard-Port 3848). Name = Ordner unter `.zibby/workflows/`. |
 | `zibby login` / `logout` / `status` | Cloud-Authentifizierung. |
-| `zibby workflow deploy [name]` | **Deployt** einen Workflow in die Zibby Cloud (interaktive Auswahl, wenn der Name weggelassen wird). |
-| `zibby workflow trigger <uuid>` | **Führt** einen deployten Workflow in der Cloud aus. Die UUID ist kanonisch (Namen sind nur lokal). UUIDs bekommst du über `workflow list` oder die Ausgabe von `deploy`. |
-| `zibby workflow logs [jobId] -t` | Verfolgt **Logs** eines Laufs, Heroku-Stil. `-t`, um live zu folgen. |
-| `zibby workflow list` | **Listet** lokale + deployte Workflows. |
-| `zibby workflow download <uuid>` | **Holt** einen deployten Workflow zurück nach lokal — bearbeiten + erneut deployen. |
-| `zibby workflow delete <uuid>` | **Löscht** einen deployten Workflow. |
+| `zibby agent deploy [name]` | **Deployt** einen Workflow in die Zibby Cloud (interaktive Auswahl, wenn der Name weggelassen wird). |
+| `zibby agent trigger <uuid>` | **Führt** einen deployten Workflow in der Cloud aus. Die UUID ist kanonisch (Namen sind nur lokal). UUIDs bekommst du über `agent list` oder die Ausgabe von `deploy`. |
+| `zibby agent logs [jobId] -t` | Verfolgt **Logs** eines Laufs, Heroku-Stil. `-t`, um live zu folgen. |
+| `zibby agent list` | **Listet** lokale + deployte Workflows. |
+| `zibby agent download <uuid>` | **Holt** einen deployten Workflow zurück nach lokal — bearbeiten + erneut deployen. |
+| `zibby agent delete <uuid>` | **Löscht** einen deployten Workflow. |
 
 **Lokale** Läufe landen in `.zibby/output/sessions/<id>/` mit Roh-Ausgaben, geparstem JSON und einem JSONL-Ausführungsprotokoll — replay-freundlich. **Cloud**-Läufe verwenden dasselbe On-Disk-Format, vorgelagert durch die Befehle trigger/logs.
 
-**Lokale vs. Cloud-Identität**: Workflow-Ordnernamen (`my-pipeline`) sind *lokal* — verwendet von `workflow new`, `workflow start`, `workflow deploy`. Cloud-Workflows werden über die **UUID** identifiziert — verwendet von `workflow trigger`, `workflow logs`, `workflow download`, `workflow delete`. Nach deinem ersten `deploy` wird die UUID in `.zibby/workflows/<name>/.zibby-deploy.json` zwischengespeichert (committe sie ins Git, damit Mitarbeitende dieselbe kanonische Referenz teilen).
-
-Die CLI integriert sich außerdem mit [Zibby Studio](https://zibby.dev) — einer Desktop-UI zum Visualisieren laufender Ausführungen, zum Anpinnen von Sessions und zum Stoppen eines Workflows per Knopfdruck.
+**Lokale vs. Cloud-Identität**: Workflow-Ordnernamen (`my-pipeline`) sind *lokal* — verwendet von `agent new`, `agent start`, `agent deploy`. Cloud-Workflows werden über die **UUID** identifiziert — verwendet von `agent trigger`, `agent logs`, `agent download`, `agent delete`. Nach deinem ersten `deploy` wird die UUID in `.zibby/workflows/<name>/.zibby-deploy.json` zwischengespeichert (committe sie ins Git, damit Mitarbeitende dieselbe kanonische Referenz teilen).
 
 > 📋 **Vollständiger CLI-Spickzettel** inklusive `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push` (UI-Agent-Speicher + Team-Sync) und `zibby test` steht im [README von `@zibby/cli`](https://www.npmjs.com/package/@zibby/cli). Die obigen Workflow-Befehle sind die für die Engine relevante Teilmenge.
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ Wenn du Claude Code + Cursor + Codex zu einer Pipeline mit strukturierter Überg
 
 | Primitive | Was es tut |
 |---|---|
-| `WorkflowGraph` | Der DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
+| `Graph` | Der DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
 | `Node` | Eine Agenten-Invocation. Config: `prompt`, `outputSchema` (Zod), optional `agent`, `retries`, `skills`. |
 | Sub-Graph-Node | `addNode(name, { workflow: 'other-name', ... })` — dispatcht einen weiteren deployten Workflow als Kind. Synchron (poll + merge) oder asynchron (`async: true`, fire-and-forget). Siehe [Sub-graphs](#sub-graphs) unten. |
 | `AgentStrategy` | Abstrakte Basis. Implementiere `canHandle(ctx)` und `invoke(prompt, opts)`. |

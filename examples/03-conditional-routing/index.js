@@ -9,7 +9,7 @@
  * Run: `node index.js --reject`  — review rejects, loops back
  */
 
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
 import { z } from 'zod';
 
 const reject = process.argv.includes('--reject');
@@ -35,7 +35,7 @@ const Draft  = z.object({ content: z.string(), attempts: z.number() });
 const Review = z.object({ approved: z.boolean() });
 const Ship   = z.object({ url: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('draft',  { prompt: 'Write a draft',     outputSchema: Draft })
   .addNode('review', { prompt: 'Approve or reject', outputSchema: Review })
   .addNode('ship',   { prompt: 'Publish it',        outputSchema: Ship })

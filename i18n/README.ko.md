@@ -43,22 +43,22 @@ graph
 
 ```bash
 # 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli workflow new my-pipeline
+npx @zibby/cli agent new my-pipeline
 
 # 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli workflow start my-pipeline
+npx @zibby/cli agent start my-pipeline
 
 # 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
 npx @zibby/cli login
-npx @zibby/cli workflow deploy my-pipeline
+npx @zibby/cli agent deploy my-pipeline
 
 # 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli workflow trigger <uuid>     # uuid printed by `deploy` or `workflow list`
-npx @zibby/cli workflow logs -t
+npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
+npx @zibby/cli agent logs -t
 
 # 5. Manage the fleet
-npx @zibby/cli workflow list               # local + deployed (shows UUIDs)
-npx @zibby/cli workflow delete <uuid>      # tear one down
+npx @zibby/cli agent list               # local + deployed (shows UUIDs)
+npx @zibby/cli agent delete <uuid>      # tear one down
 ```
 
 매번 `npx`하는 대신 한 번만 설치하고 싶다면:
@@ -72,25 +72,23 @@ zibby --help
 
 ## CLI: 워크플로의 전체 라이프사이클
 
-모든 워크플로 작업은 일관성을 위해 `zibby workflow <verb>` 아래에 있습니다. 최상위 단순 형식(`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`)은 하위 호환 별칭으로 유지됩니다.
+모든 워크플로 작업은 일관성을 위해 `zibby agent <verb>` 아래에 있습니다. 최상위 단순 형식(`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`)은 하위 호환 별칭으로 유지됩니다.
 
 | 명령 | 하는 일 |
 |---|---|
-| `zibby workflow new <name>` | `.zibby/workflows/<name>/` 아래에 새 커스텀 워크플로를 **생성**합니다. `.zibby/`가 없으면 자동 생성합니다 — 별도의 init 단계가 필요 없습니다. |
-| `zibby workflow start <name>` | 워크플로를 핫 리로드와 함께 **로컬**로 실행합니다(기본 포트 3848). Name = `.zibby/workflows/` 아래의 폴더. |
+| `zibby agent new <name>` | `.zibby/workflows/<name>/` 아래에 새 커스텀 워크플로를 **생성**합니다. `.zibby/`가 없으면 자동 생성합니다 — 별도의 init 단계가 필요 없습니다. |
+| `zibby agent start <name>` | 워크플로를 핫 리로드와 함께 **로컬**로 실행합니다(기본 포트 3848). Name = `.zibby/workflows/` 아래의 폴더. |
 | `zibby login` / `logout` / `status` | 클라우드 인증. |
-| `zibby workflow deploy [name]` | 워크플로를 Zibby Cloud에 **배포**합니다(name을 생략하면 대화형 선택기). |
-| `zibby workflow trigger <uuid>` | 배포된 워크플로를 클라우드에서 **실행**합니다. UUID가 표준입니다(이름은 로컬 전용). UUID는 `workflow list` 또는 `deploy` 출력에서 얻습니다. |
-| `zibby workflow logs [jobId] -t` | 실행의 **로그**를 Heroku 방식으로 tail합니다. `-t`로 라이브 추적합니다. |
-| `zibby workflow list` | 로컬 + 배포된 워크플로를 **나열**합니다. |
-| `zibby workflow download <uuid>` | 배포된 워크플로를 로컬로 다시 **가져옵니다** — 편집 후 재배포. |
-| `zibby workflow delete <uuid>` | 배포된 워크플로를 **삭제**합니다. |
+| `zibby agent deploy [name]` | 워크플로를 Zibby Cloud에 **배포**합니다(name을 생략하면 대화형 선택기). |
+| `zibby agent trigger <uuid>` | 배포된 워크플로를 클라우드에서 **실행**합니다. UUID가 표준입니다(이름은 로컬 전용). UUID는 `agent list` 또는 `deploy` 출력에서 얻습니다. |
+| `zibby agent logs [jobId] -t` | 실행의 **로그**를 Heroku 방식으로 tail합니다. `-t`로 라이브 추적합니다. |
+| `zibby agent list` | 로컬 + 배포된 워크플로를 **나열**합니다. |
+| `zibby agent download <uuid>` | 배포된 워크플로를 로컬로 다시 **가져옵니다** — 편집 후 재배포. |
+| `zibby agent delete <uuid>` | 배포된 워크플로를 **삭제**합니다. |
 
 **로컬** 실행은 원시 출력, 파싱된 JSON, 그리고 JSONL 실행 로그와 함께 `.zibby/output/sessions/<id>/`에 안착합니다 — 재생에 적합합니다. **클라우드** 실행은 동일한 온디스크 형식을 사용하며, trigger/logs 명령으로 전면화됩니다.
 
-**로컬 vs 클라우드 식별**: 워크플로 폴더 이름(`my-pipeline`)은 *로컬*입니다 — `workflow new`, `workflow start`, `workflow deploy`에서 사용됩니다. 클라우드 워크플로는 **UUID**로 식별됩니다 — `workflow trigger`, `workflow logs`, `workflow download`, `workflow delete`에서 사용됩니다. 첫 `deploy` 이후, UUID는 `.zibby/workflows/<name>/.zibby-deploy.json`에 캐시됩니다(협업자가 동일한 표준 참조를 공유하도록 git에 커밋하세요).
-
-CLI는 [Zibby Studio](https://zibby.dev)와도 통합됩니다 — 라이브 실행 시각화, 세션 고정, 버튼으로 워크플로 중지를 위한 데스크톱 UI입니다.
+**로컬 vs 클라우드 식별**: 워크플로 폴더 이름(`my-pipeline`)은 *로컬*입니다 — `agent new`, `agent start`, `agent deploy`에서 사용됩니다. 클라우드 워크플로는 **UUID**로 식별됩니다 — `agent trigger`, `agent logs`, `agent download`, `agent delete`에서 사용됩니다. 첫 `deploy` 이후, UUID는 `.zibby/workflows/<name>/.zibby-deploy.json`에 캐시됩니다(협업자가 동일한 표준 참조를 공유하도록 git에 커밋하세요).
 
 > 📋 **전체 CLI 치트시트**에는 `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push`(UI 에이전트 메모리 + 팀 동기화), 그리고 `zibby test`가 포함되며 [`@zibby/cli`의 README](https://www.npmjs.com/package/@zibby/cli)에 있습니다. 위의 워크플로 명령은 엔진 관련 하위 집합입니다.
 
@@ -105,7 +103,7 @@ npm install @zibby/agent-workflow
 ```
 
 ```js
-import { WorkflowGraph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class MyAgent extends AgentStrategy {
@@ -120,7 +118,7 @@ registerStrategy(new MyAgent());
 const Plan = z.object({ tasks: z.array(z.string()) });
 const Done = z.object({ summary: z.string() });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
   .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
   .addEdge('plan', 'finish')
@@ -154,7 +152,7 @@ Claude Code + Cursor + Codex를 그들 사이의 구조화된 핸드오프와 �
 
 | 프리미티브 | 하는 일 |
 |---|---|
-| `WorkflowGraph` | DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
+| `Graph` | DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
 | `Node` | 한 번의 에이전트 호출. 설정: `prompt`, `outputSchema`(Zod), 선택적 `agent`, `retries`, `skills`. |
 | 서브그래프 노드 | `addNode(name, { workflow: 'other-name', ... })` — 다른 배포된 워크플로를 자식으로 디스패치합니다. 동기(폴링 + 병합) 또는 비동기(`async: true`, 발사 후 망각). 아래의 [서브그래프](#서브그래프)를 참고. |
 | `AgentStrategy` | 추상 기반 클래스. `canHandle(ctx)`와 `invoke(prompt, opts)`를 구현합니다. |

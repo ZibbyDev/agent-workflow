@@ -12,7 +12,7 @@
  */
 
 import {
-  WorkflowGraph,
+  Graph,
   AgentStrategy,
   registerStrategy,
   registerSkill,
@@ -61,7 +61,7 @@ registerStrategy(agent);
 
 const Tools = z.object({ tools: z.array(z.string()) });
 
-const graph = new WorkflowGraph()
+const graph = new Graph()
   // This node opts into the 'browser' skill — the agent gets those tools.
   .addNode('with_browser', {
     prompt: 'What tools do I have?',

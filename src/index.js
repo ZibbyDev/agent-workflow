@@ -25,8 +25,9 @@
  *   const result = await graph.run(null, { agentType: 'my-agent', cwd: process.cwd() });
  */
 
-// Graph engine
-export { WorkflowGraph } from './graph.js';
+// Graph engine. `Graph` is a short alias for `WorkflowGraph` — same class.
+// (WorkflowGraph stays the canonical, self-documenting name; Graph is for brevity.)
+export { WorkflowGraph, WorkflowGraph as Graph } from './graph.js';
 
 // Sub-graph dispatch — for custom-execute nodes that need to fan out
 // to multiple child workflows in a loop (the declarative
