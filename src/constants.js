@@ -57,6 +57,12 @@ export const SKILLS = {
   GIT_WRITE:        'git-write',
   SLACK:            'slack',
   LARK:             'lark',
+  // `discord` — post messages / list channels in the user's Discord server
+  // as their bot (paste-token integration, provider 'discord'). Backed by
+  // discordSkill in @zibby/skills (served over bin/mcp-skill.mjs as
+  // mcp__discord__* tools). The id MUST match the skill's registered id
+  // ('discord'). Mirrors the id in @zibby/skills' own SKILLS map.
+  DISCORD:          'discord',
   // `chat_notify` — provider-agnostic chat notification. Routes to
   // Slack OR Lark depending on which integration the project has
   // connected. Backend's SKILL_INTEGRATION_MAP renders this as
