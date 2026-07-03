@@ -100,6 +100,16 @@ export const SKILLS = {
   // Notion OAuth — multi-workspace integration. Used by notify-notion
   // and as a destination for any report-producing parent template.
   NOTION:            'notion',
+  // `google-docs` — create/append/read Google Docs (googleDocsSkill in
+  // @zibby/skills, served over MCP via bin/mcp-skill.mjs as mcp__gdocs__*
+  // tools). Backed by the drive.file-scoped 'google' OAuth integration;
+  // backend REQUIRED_INTEGRATION_MAP maps 'google-docs' →
+  // INTEGRATIONS.GOOGLE (gating deploy on a connected Google). Declared
+  // here so SKILLS.GOOGLE_DOCS resolves in any consumer importing from
+  // @zibby/core or @zibby/agent-workflow (mirrors the id in @zibby/skills'
+  // own SKILLS map). The id MUST match the skill's registered id
+  // ('google-docs').
+  GOOGLE_DOCS:       'google-docs',
   // `linear` — api-key paste-token issue tracker (linearSkill in
   // @zibby/skills, served over MCP via bin/mcp-skill.mjs). Declared here so
   // SKILLS.LINEAR resolves in any consumer importing from @zibby/core or
