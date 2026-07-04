@@ -116,6 +116,22 @@ export const SKILLS = {
   // own SKILLS map). The id MUST match the skill's registered id
   // ('google-docs').
   GOOGLE_DOCS:       'google-docs',
+  // `lark-docs` — read/create/append Lark/Feishu documents (larkDocsSkill in
+  // @zibby/skills, served over MCP via bin/mcp-skill.mjs as mcp__larkdocs__*
+  // tools). REUSES the connected Lark app (integration 'lark' — same app as
+  // messaging), so backend REQUIRED_INTEGRATION_MAP maps 'lark-docs' →
+  // INTEGRATIONS.LARK. Declared here so SKILLS.LARK_DOCS resolves in any
+  // consumer importing from @zibby/core or @zibby/agent-workflow (mirrors the
+  // id in @zibby/skills' own SKILLS map). The id MUST match the skill's
+  // registered id ('lark-docs').
+  LARK_DOCS:         'lark-docs',
+  // `doc_source` — INTEGRATION-GATE MARKER (like `circleci`), NOT a runtime MCP
+  // skill: no skill object registers under this id (the runtime tool-resolver
+  // warns + skips it). Declaring it on a node's `skills` makes the backend gate
+  // deploy on a REQUIRED document-source OR-group {any:[google, notion, lark]}
+  // (google-docs / notion / lark-docs all read a PRD). Used by the prd-review
+  // template. The id MUST match the backend REQUIRED_INTEGRATION_MAP key.
+  DOC_SOURCE:        'doc_source',
   // `linear` — api-key paste-token issue tracker (linearSkill in
   // @zibby/skills, served over MCP via bin/mcp-skill.mjs). Declared here so
   // SKILLS.LINEAR resolves in any consumer importing from @zibby/core or
