@@ -526,6 +526,23 @@ export class WorkflowGraph {
       if (nodeSkills && nodeSkills.length > 0) {
         config.skills = [...nodeSkills];
       }
+      // Native plugins DECLARED on the node (e.g. Codex plugins:
+      //   plugins: [{ name, marketplacePath }]
+      // ). Survive serialization so the saved workflow row carries the
+      // declaration (parity with `skills` above). Plugins are LOCAL-only
+      // (a vendored marketplace path resolved at runtime) and map to no
+      // marketplace integration, so this is metadata only — the runtime reads
+      // the live `node.config.plugins` off the imported graph. Shallow-clone
+      // each object so the serialized graph never aliases live node config.
+      // Guarded: a node with no `plugins` gets no `config.plugins` key.
+      const nodePlugins = Array.isArray(node?.config?.plugins) ? node.config.plugins
+                        : Array.isArray(node?.plugins) ? node.plugins
+                        : null;
+      if (nodePlugins && nodePlugins.length > 0) {
+        config.plugins = nodePlugins.map(p =>
+          (p && typeof p === 'object') ? { ...p } : p
+        );
+      }
       // Stores DECLARED on the node (Stores v2 contract) are objects:
       //   stores: [{ name, description }, ...]
       // where `name` matches ^[a-z][a-z0-9_]{0,40}$ (forms an env-key suffix)

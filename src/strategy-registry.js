@@ -130,6 +130,10 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     schema: options.schema || context.schema,
     images: options.images || context.images || [],
     skills: options.skills || context.skills || [],
+    // Native agent plugins (mirrors `skills`). Passed through to the strategy;
+    // only the Codex strategy consumes it (installs into CODEX_HOME), others
+    // ignore it. No prompt fragments derive from plugins.
+    plugins: options.plugins || context.plugins || [],
     config,
   };
 

@@ -138,6 +138,11 @@ export class Node {
           workspace: cwd,
           schema: this.isZodSchema ? this.outputSchema : null,
           skills: this.config.skills || [],
+          // Native agent plugins declared on the node (e.g. Codex plugins:
+          // `plugins: [{ name, marketplacePath }]`). Flows like `skills` →
+          // the selected strategy decides what to do with it (the Codex
+          // strategy installs them into CODEX_HOME; claude/gemini ignore it).
+          plugins: this.config.plugins || [],
           sessionPath,
           config: zibbyConfig,
           nodeName: this.name,
