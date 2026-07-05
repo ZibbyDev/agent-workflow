@@ -494,6 +494,12 @@ export class WorkflowGraph {
       if (typeof node.customExecute === 'function') {
         config.executeCode = node.customExecute.toString();
       }
+      // Sub-graph dispatch (parent-child): the CHILD workflow slug this node
+      // runs. Display-only metadata so the graph viewer can badge the node as a
+      // sub-workflow + name its child (the dispatch itself is inside executeCode).
+      if (typeof node?.config?.dispatchesWorkflow === 'string' && node.config.dispatchesWorkflow.trim()) {
+        config.dispatchesWorkflow = node.config.dispatchesWorkflow.trim();
+      }
       if (node.outputSchema) {
         if (typeof node.outputSchema._def !== 'undefined') {
           // Robust convert: prefer Zod v4's native converter, fall back to the
