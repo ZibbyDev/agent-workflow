@@ -322,6 +322,13 @@ export class WorkflowGraph {
         // and no outputSchema to validate; the child's final state IS
         // the output. _isCustomCode bypasses Node's outputSchema check.
         _isCustomCode: true,
+        // Static, introspectable record of the CHILD workflow this node
+        // dispatches. The dispatch itself happens inside the compiled
+        // `execute` closure below (so the slug is otherwise invisible after
+        // buildGraph()), but tooling — the marketplace sync deriving a
+        // parent-child agent's requiredAgents, graph viewers, docs — needs to
+        // know the child statically. Purely descriptive; the runtime ignores it.
+        dispatchesWorkflow: subgraphCfg.workflow,
         // Propagate Node-level cross-cutting concerns from the user's
         // sub-graph config. Retries here re-run the WHOLE dispatch
         // (POST + poll loop) on transient failures — the graph engine
