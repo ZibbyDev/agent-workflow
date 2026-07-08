@@ -44,6 +44,7 @@ import { mkdirSync, existsSync, statSync, readdirSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { logger } from './logger.js';
 import { runInContext, getExecContext } from './exec-context.js';
@@ -71,6 +72,75 @@ export class SubgraphFallback extends Error {
     this.reason = reason;
     this.detail = detail || null;
     this.name = 'SubgraphFallback';
+  }
+}
+
+/**
+ * ── Child env scoping (the child runs with its OWN row's env) ───────────────
+ *
+ * The begin endpoint returns the CHILD workflow row's decrypted `envSecret`
+ * map. Everything downstream reads credentials from `process.env` at run
+ * time (@zibby/core claude-strategy reads CLAUDE_CODE_OAUTH_TOKEN /
+ * ANTHROPIC_API_KEY per invoke and re-materializes ~/.claude/.credentials.json
+ * on token mismatch; every skill's `resolve()` reads its tokens the same way)
+ * — so the correct seam is TEMPORAL scoping: overlay the child's keys onto
+ * `process.env` for the duration of the child run, restore the previous
+ * values after. Precedence falls out naturally:
+ *   - a key the child defines → child value wins for the child's run;
+ *   - a key the child does NOT define → wrapper env remains the fallback.
+ *
+ * Concurrency contract (the honest part):
+ *   - `process.env` is process-global, so two OVERLAPPING children with
+ *     different envs would race. Env-CARRYING child runs are therefore
+ *     SERIALIZED through a FIFO queue — a wrapper that `Promise.allSettled`s
+ *     several dispatchSubgraph calls still gets correct per-child creds,
+ *     at the cost of those children running one-after-another. Children
+ *     whose rows define NO env never touch `process.env` and keep full
+ *     parallelism (they share the wrapper env, exactly as before).
+ *   - Re-entrancy (grand-children): a child holding the scope that
+ *     dispatches its own env-carrying in-process child must NOT dead-wait
+ *     on itself. Ownership is tracked via AsyncLocalStorage — a dispatch
+ *     inside the holder's async lineage skips the queue and NESTS its
+ *     overlay (set on entry, restored to the child's values on exit).
+ *   - Residual limitation: while an env-carrying child runs, a PARALLEL
+ *     branch of the wrapper's own graph that invokes an agent concurrently
+ *     would observe the child's overlay. Wrappers dispatch children from
+ *     within a single node in practice; documented in the CLI templates.
+ */
+const envScopeALS = new AsyncLocalStorage();
+let envScopeQueue = Promise.resolve();
+
+async function withChildEnvScope(childEnv, fn) {
+  const entries = childEnv && typeof childEnv === 'object' && !Array.isArray(childEnv)
+    ? Object.entries(childEnv).filter(([k, v]) => typeof k === 'string' && k && typeof v === 'string')
+    : [];
+  if (entries.length === 0) return fn(); // no env → no mutation → free parallelism
+
+  const alreadyHolder = envScopeALS.getStore() === true;
+  let release = null;
+  if (!alreadyHolder) {
+    // FIFO queue: chain onto the previous env-carrying run and hold the
+    // slot until we restore. `prev` never rejects (release() in finally).
+    const prev = envScopeQueue;
+    envScopeQueue = new Promise((resolve) => { release = resolve; });
+    await prev;
+  }
+
+  const saved = new Map();
+  try {
+    for (const [k, v] of entries) {
+      saved.set(k, Object.prototype.hasOwnProperty.call(process.env, k) ? process.env[k] : undefined);
+      process.env[k] = v;
+    }
+    // Values are NEVER logged — key count only.
+    logger.debug(`[in-process subgraph] scoped ${entries.length} child env var(s)${alreadyHolder ? ' (nested)' : ''}`);
+    return await envScopeALS.run(true, fn);
+  } finally {
+    for (const [k, prevVal] of saved) {
+      if (prevVal === undefined) delete process.env[k];
+      else process.env[k] = prevVal;
+    }
+    if (release) release();
   }
 }
 
@@ -431,10 +501,15 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
   //    `parentCtx.executionId === childExecutionId`, so grand-children
   //    chain correctly.
   const startedAt = Date.now();
-  const agentInstance = (typeof AgentClass === 'function' && AgentClass.prototype?.buildGraph)
-    ? new AgentClass()
-    : AgentClass; // Already an instance (some templates export one).
-  const childGraph = await agentInstance.buildGraph();
+
+  // The child row's OWN env (decrypted envSecret, returned by begin ≥ the
+  // 2026-07-08 backend). Temporally scoped into process.env around the child
+  // run via withChildEnvScope — child value wins, wrapper env is the fallback
+  // for keys the child doesn't define. Older backends omit the field → null
+  // → byte-identical inherit-the-wrapper behavior.
+  const childEnv = begin.env && typeof begin.env === 'object' && !Array.isArray(begin.env)
+    ? begin.env
+    : null;
 
   // Child's initialState: start from a copy of the parent's relevant
   // context, then layer the child's input on top. The child workflow's
@@ -469,17 +544,27 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
   let runResult;
   let finalState;
   try {
-    runResult = await runInContext(
-      {
-        executionId: childExecutionId,
-        parentExecutionId: parentCtx.executionId,
-        conversationId: options.conversationId !== undefined ? options.conversationId : parentCtx.conversationId,
-        dispatchMode: 'inprocess',
-      },
-      () => childGraph.run(options.parentAgent, childInitialState, {
-        signal: options.signal,
-      }),
-    );
+    // buildGraph() runs INSIDE the env scope too — templates may read
+    // process.env at graph-build time (skill gating, base URLs). A throw
+    // here now also finalizes the child row as failed (previously it
+    // leaked a permanently-running orphan row).
+    runResult = await withChildEnvScope(childEnv, async () => {
+      const agentInstance = (typeof AgentClass === 'function' && AgentClass.prototype?.buildGraph)
+        ? new AgentClass()
+        : AgentClass; // Already an instance (some templates export one).
+      const childGraph = await agentInstance.buildGraph();
+      return runInContext(
+        {
+          executionId: childExecutionId,
+          parentExecutionId: parentCtx.executionId,
+          conversationId: options.conversationId !== undefined ? options.conversationId : parentCtx.conversationId,
+          dispatchMode: 'inprocess',
+        },
+        () => childGraph.run(options.parentAgent, childInitialState, {
+          signal: options.signal,
+        }),
+      );
+    });
     // Defensive: some legacy graphs may have already been unwrapped by a
     // wrapper. Detect both shapes and prefer the wrapper-shape when it
     // carries the canonical `success` / `state` keys.

@@ -442,6 +442,201 @@ describe('runInProcessSubgraph — happy path (registry pre-populated)', () => {
   });
 });
 
+describe('runInProcessSubgraph — child env scoping (child runs with its OWN row env)', () => {
+  // Root-fix (2026-07-08) for the last in-process child-dispatch gap: begin
+  // now returns the child row's decrypted envSecret, and the executor
+  // temporally scopes it into process.env around the child run. Same gap
+  // class as nodeConfigOverrides (0.4.30); creds are read from process.env
+  // at run time (claude-strategy per-invoke, skill resolve()), so temporal
+  // scoping is the correct seam.
+
+  const matchingTag = () => {
+    const selfMajor = (process.versions?.node || '').split('.')[0];
+    return `node${selfMajor}-${process.platform}-${process.arch}`;
+  };
+
+  /** fetch stub that serves begin per childWorkflowType with its own env map. */
+  function mockBeginWithEnv(envByWorkflow) {
+    let seq = 0;
+    mockFetch(async (url, opts) => {
+      if (url.endsWith('/internal/subgraph/begin')) {
+        const body = JSON.parse(opts.body);
+        seq += 1;
+        return jsonResp({
+          childExecutionId: `child-env-${body.childWorkflowType}-${seq}`,
+          runtimeTag: matchingTag(),
+          bundlePresignedUrl: 'x', sourcesPresignedUrl: 'x',
+          workflowVersion: 1, workflowUuid: 'u', bundleReady: true,
+          ...(envByWorkflow[body.childWorkflowType] !== undefined
+            ? { env: envByWorkflow[body.childWorkflowType] }
+            : {}),
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error(`unexpected url ${url}`);
+    });
+  }
+
+  const SCOPE_KEYS = ['TEST_CHILD_ONLY_CRED', 'TEST_SHARED_CRED', 'TEST_WRAPPER_ONLY'];
+  const SAVED = {};
+  beforeEach(() => { for (const k of SCOPE_KEYS) { SAVED[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => {
+    for (const k of SCOPE_KEYS) {
+      if (SAVED[k] === undefined) delete process.env[k];
+      else process.env[k] = SAVED[k];
+    }
+  });
+
+  it('seeds child env during the run (child wins, wrapper is fallback) and RESTORES after', async () => {
+    process.env.TEST_SHARED_CRED = 'wrapper-value';   // child overrides this
+    process.env.TEST_WRAPPER_ONLY = 'wrapper-only';   // child does not define → fallback visible
+    mockBeginWithEnv({
+      'env-child': {
+        TEST_CHILD_ONLY_CRED: 'child-secret',
+        TEST_SHARED_CRED: 'child-value',
+      },
+    });
+    let seenDuringRun = null;
+    registry.register('env-child', class {
+      buildGraph() {
+        return {
+          run: async () => {
+            seenDuringRun = {
+              childOnly: process.env.TEST_CHILD_ONLY_CRED,
+              shared: process.env.TEST_SHARED_CRED,
+              wrapperOnly: process.env.TEST_WRAPPER_ONLY,
+            };
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    });
+
+    await runInProcessSubgraph('env-child');
+
+    // During the run: child value wins; wrapper env remains the fallback.
+    expect(seenDuringRun).toEqual({
+      childOnly: 'child-secret',
+      shared: 'child-value',
+      wrapperOnly: 'wrapper-only',
+    });
+    // After the run: wrapper state fully restored.
+    expect(process.env.TEST_CHILD_ONLY_CRED).toBeUndefined();
+    expect(process.env.TEST_SHARED_CRED).toBe('wrapper-value');
+    expect(process.env.TEST_WRAPPER_ONLY).toBe('wrapper-only');
+  });
+
+  it('restores env even when the child run throws', async () => {
+    process.env.TEST_SHARED_CRED = 'wrapper-value';
+    mockBeginWithEnv({ 'env-thrower': { TEST_SHARED_CRED: 'child-value', TEST_CHILD_ONLY_CRED: 'x' } });
+    registry.register('env-thrower', class {
+      buildGraph() { return { run: async () => { throw new Error('boom'); } }; }
+    });
+    await expect(runInProcessSubgraph('env-thrower')).rejects.toThrow('boom');
+    expect(process.env.TEST_SHARED_CRED).toBe('wrapper-value');
+    expect(process.env.TEST_CHILD_ONLY_CRED).toBeUndefined();
+  });
+
+  it('old backend (no env field) → process.env untouched, run identical to before', async () => {
+    process.env.TEST_SHARED_CRED = 'wrapper-value';
+    mockBeginWithEnv({}); // begin response has NO env key at all
+    let seen = null;
+    registry.register('no-env-child', class {
+      buildGraph() {
+        return {
+          run: async () => {
+            seen = process.env.TEST_SHARED_CRED;
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    });
+    const { finalState } = await runInProcessSubgraph('no-env-child');
+    expect(finalState.ok).toBe(true);
+    expect(seen).toBe('wrapper-value'); // inherited wrapper env, as always
+    expect(process.env.TEST_SHARED_CRED).toBe('wrapper-value');
+  });
+
+  it('SERIALIZES concurrent env-carrying children — each sees only its own creds', async () => {
+    // dispatchSubgraph calls run concurrently via Promise.allSettled in
+    // custom wrapper nodes. process.env is process-global, so env-carrying
+    // child runs are FIFO-serialized; a child must never observe a sibling's
+    // credential mid-run.
+    mockBeginWithEnv({
+      'par-a': { TEST_SHARED_CRED: 'cred-A' },
+      'par-b': { TEST_SHARED_CRED: 'cred-B' },
+    });
+    const observations = [];
+    const mkClass = (label) => class {
+      buildGraph() {
+        return {
+          run: async () => {
+            const before = process.env.TEST_SHARED_CRED;
+            await new Promise((r) => setTimeout(r, 25)); // let the sibling try to overlap
+            const after = process.env.TEST_SHARED_CRED;
+            observations.push({ label, before, after });
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    };
+    registry.register('par-a', mkClass('A'));
+    registry.register('par-b', mkClass('B'));
+
+    await Promise.all([
+      runInProcessSubgraph('par-a'),
+      runInProcessSubgraph('par-b'),
+    ]);
+
+    expect(observations).toHaveLength(2);
+    for (const o of observations) {
+      const expected = o.label === 'A' ? 'cred-A' : 'cred-B';
+      expect(o.before).toBe(expected);
+      expect(o.after).toBe(expected); // no mid-run contamination
+    }
+    expect(process.env.TEST_SHARED_CRED).toBeUndefined(); // fully restored
+  });
+
+  it('re-entrant grand-child dispatch does NOT deadlock and nests the overlay correctly', async () => {
+    mockBeginWithEnv({
+      'reentrant-parent': { TEST_SHARED_CRED: 'parent-cred' },
+      'reentrant-grandchild': { TEST_SHARED_CRED: 'grandchild-cred' },
+    });
+    let seenInGrandchild = null;
+    let seenAfterGrandchild = null;
+    registry.register('reentrant-grandchild', class {
+      buildGraph() {
+        return {
+          run: async () => {
+            seenInGrandchild = process.env.TEST_SHARED_CRED;
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    });
+    registry.register('reentrant-parent', class {
+      buildGraph() {
+        return {
+          run: async () => {
+            // Holder dispatches its own env-carrying in-process child —
+            // must skip the FIFO queue (ALS ownership) instead of dead-
+            // waiting on itself.
+            await runInProcessSubgraph('reentrant-grandchild');
+            seenAfterGrandchild = process.env.TEST_SHARED_CRED;
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    });
+
+    await runInProcessSubgraph('reentrant-parent');
+
+    expect(seenInGrandchild).toBe('grandchild-cred');       // nested overlay applied
+    expect(seenAfterGrandchild).toBe('parent-cred');        // restored to the HOLDER's value
+    expect(process.env.TEST_SHARED_CRED).toBeUndefined();   // fully unwound
+  }, 10_000);
+});
+
 describe('SubgraphFallback shape', () => {
   it('carries .fallback=true and .reason', () => {
     const e = new SubgraphFallback('test-reason', 'detail-string');
