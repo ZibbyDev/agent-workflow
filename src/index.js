@@ -97,3 +97,8 @@ export {
 // by Studio (studio/src/utils/studioRunStreamLog.js) and the test runner
 // (packages/skills/src/test-runner.js). Marker prefix is a public protocol.
 export { timeline, Timeline, WORKFLOW_GRAPH_LOG_MARKER_PREFIX } from './timeline.js';
+
+// Canonical COMPOSE knowledge — the single source every composing surface
+// (Copilot skill, agent-builder template, `zibby init` CLAUDE.md §10) imports
+// instead of hand-copying. See src/compose-knowledge.js editing policy.
+export { COMPOSE_KNOWLEDGE } from './compose-knowledge.js';
