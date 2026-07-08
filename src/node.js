@@ -26,7 +26,7 @@ export class Node {
     this.prompt = config.prompt;
     this.outputSchema = config.outputSchema;
 
-    if (!this.outputSchema && !config._isCustomCode) {
+    if (!this.outputSchema && !config._isCustomCode && !config._isRouter) {
       throw new Error(
         `Node '${this.name}' must define outputSchema (Zod schema). ` +
         `This defines the contract for what the node returns to state.`
@@ -41,6 +41,18 @@ export class Node {
   }
 
   async execute(context, state) {
+    // Router passthrough. A router node does NO work of its own — it exists
+    // so the branch point is a first-class, named step in the graph; the
+    // actual routing decision lives on its conditional out-edges
+    // (`addConditionalEdges(name, routeFn)`), which the graph engine
+    // evaluates AFTER this node "completes". Created via
+    // `graph.addNode(name, { description })` — a config with no execute,
+    // no prompt and no outputSchema (graph.addNode marks it `_isRouter`).
+    if (this.config._isRouter) {
+      logger.debug(`[workflow] node '${this.name}': router passthrough (routing happens on its conditional edges)`);
+      return { success: true, output: {}, raw: null };
+    }
+
     const getAllState = () =>
       state && typeof state.getAll === 'function' ? state.getAll() : context;
 
@@ -223,17 +235,3 @@ export class Node {
   }
 }
 
-export class ConditionalNode extends Node {
-  constructor(config) {
-    super({ ...config, _isCustomCode: true });
-    this.condition = config.condition;
-  }
-
-  async execute(context, state) {
-    const stateValues = state && typeof state.getAll === 'function'
-      ? state.getAll()
-      : context;
-    const nextNode = this.condition(stateValues);
-    return { success: true, output: { nextNode }, raw: null };
-  }
-}

@@ -30,9 +30,13 @@ function conditionalEdgesFrom(serialized, source) {
   // a route function can return). serialize() additionally rewrites every
   // terminating edge's target to a unique per-edge End node (`END__1`, `END__2`,
   // … — BPMN multiple-end display), so normalize those back to the logical
-  // 'END' sentinel here; the inference is what's under test.
+  // 'END' sentinel here; the inference is what's under test. It ALSO
+  // materializes a `<source>__branch` decision display node when the source is
+  // a WORKING node (these fixtures are custom-code nodes), so the labeled
+  // conditional edges fan out from the branch node — follow through it here.
+  const branchId = `${source}__branch`;
   return serialized.edges
-    .filter((e) => e.source === source)
+    .filter((e) => (e.source === source || e.source === branchId) && e.target !== branchId)
     .map((e) => (/^END__\d+$/.test(e.target) ? { ...e, target: 'END' } : e));
 }
 

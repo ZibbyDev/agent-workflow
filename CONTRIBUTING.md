@@ -39,7 +39,7 @@ Add a test alongside any new public surface area. Keep them in `src/__tests__/`.
 ```
 src/
 ├── graph.js              # WorkflowGraph: DAG builder + run loop
-├── node.js               # Node + ConditionalNode primitives
+├── node.js               # Node primitive (incl. router passthrough)
 ├── state.js              # WorkflowState (history-tracked)
 ├── output-parser.js      # Schema validation for agent output
 ├── context-loader.js     # CONTEXT.md / AGENTS.md auto-discovery

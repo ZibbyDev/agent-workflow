@@ -14,7 +14,7 @@
  */
 
 import { WorkflowState } from './state.js';
-import { Node, ConditionalNode } from './node.js';
+import { Node } from './node.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
 import { ContextLoader } from './context-loader.js';
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -381,7 +381,26 @@ export class WorkflowGraph {
       return this;
     }
 
-    const node = nodeOrConfig instanceof Node ? nodeOrConfig : new Node(nodeOrConfig);
+    // Router (pure branch-point) detection. A config with NO work payload —
+    // no execute, no prompt, no outputSchema, and not explicitly marked
+    // custom-code — is a passthrough ROUTER: it does nothing at runtime
+    // (Node.execute returns state unchanged) and exists so the branch point
+    // is a first-class named step. Its actual routing lives on its
+    // conditional out-edges (`addConditionalEdges(name, routeFn, { labels })`),
+    // and serialize() renders it as a 'decision' (the Condition diamond).
+    // Canonical authoring shape:
+    //   graph.addNode('route', { description: 'Routes on state.trigger …' });
+    //   graph.addConditionalEdges('route', routeFn, { labels: { … } });
+    const isRouterConfig =
+      !(nodeOrConfig instanceof Node)
+      && nodeOrConfig && typeof nodeOrConfig === 'object'
+      && typeof nodeOrConfig.execute !== 'function'
+      && nodeOrConfig.prompt == null
+      && nodeOrConfig.outputSchema == null
+      && nodeOrConfig._isCustomCode !== true;
+    const node = nodeOrConfig instanceof Node
+      ? nodeOrConfig
+      : new Node(isRouterConfig ? { ...nodeOrConfig, _isRouter: true } : nodeOrConfig);
     node.name = name;
     this.nodes.set(name, node);
     // Prompt template precedence: the explicit addNode(..., { prompt }) option
@@ -396,11 +415,6 @@ export class WorkflowGraph {
       this.nodePrompts.set(name, nodeOrConfig.prompt);
     }
     if (Object.keys(options).length > 0) this.nodeOptions.set(name, options);
-    return this;
-  }
-
-  addConditionalNode(name, config) {
-    this.nodes.set(name, new ConditionalNode({ ...config, name }));
     return this;
   }
 
@@ -445,13 +459,14 @@ export class WorkflowGraph {
     const nodeConfigs = {};
 
     for (const [nodeId, node] of this.nodes) {
-      // Display type. Single source of truth is the node's CLASS: a
-      // ConditionalNode renders as a 'decision' (the diamond/Condition box)
+      // Display type. Single source of truth is the node's SHAPE: a pure
+      // ROUTER node (no work payload — its routing lives on its conditional
+      // out-edges) renders as a 'decision' (the diamond/Condition box)
       // automatically — no separate setNodeType('decision') needed. An
       // explicit setNodeType() still wins as an override.
       const nodeType =
         this.nodeTypeMap.get(nodeId)
-        || (node instanceof ConditionalNode ? 'decision' : nodeId);
+        || (node?.config?._isRouter === true ? 'decision' : nodeId);
       nodes.push({ id: nodeId, type: nodeType, data: { nodeType, label: nodeId } });
 
       const config = {};
@@ -588,8 +603,32 @@ export class WorkflowGraph {
         const codeStr = this.conditionalCodeMap.get(from) || target.routes.toString();
         const possibleTargets = this._inferConditionalTargets(target.routes, target.labels);
         const labels = target.labels || {};
+
+        // Which node do the labeled conditional edges fan out FROM in the
+        // serialized view?
+        //   - A ROUTER node (or a node explicitly typed 'decision') IS the
+        //     branch point: its conditional edges fan out from the node
+        //     itself — it already renders as the diamond.
+        //   - A WORKING node (agent/dispatch/custom-code) with conditional
+        //     out-edges gets a DISPLAY-ONLY `<node>__branch` decision node
+        //     materialized between it and its targets, so the branch is
+        //     visible in the viewer instead of hiding inside edge metadata.
+        //     Runtime routing is untouched — this only rewrites the
+        //     serialized shape (like START/END below).
+        const fromNode = this.nodes.get(from);
+        const isBranchPoint =
+          fromNode?.config?._isRouter === true
+          || this.nodeTypeMap.get(from) === 'decision'
+          || !fromNode; // unknown source: keep the legacy direct-edge shape
+        let source = from;
+        if (!isBranchPoint) {
+          const branchId = `${from}__branch`;
+          nodes.push({ id: branchId, type: 'decision', data: { nodeType: 'decision', label: branchId } });
+          edges.push({ source: from, target: branchId });
+          source = branchId;
+        }
         for (const t of possibleTargets) {
-          const edge = { source: from, target: t, data: { conditionalCode: codeStr } };
+          const edge = { source, target: t, data: { conditionalCode: codeStr } };
           if (labels[t]) edge.label = labels[t];
           edges.push(edge);
         }

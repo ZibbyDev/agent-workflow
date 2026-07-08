@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/) once it
 reaches `1.0.0`. Until then, minor version bumps may include breaking changes.
 
+## [0.4.29] - 2026-07-08
+
+### Removed
+- **`addConditionalNode` is gone** (and the `ConditionalNode` export with it).
+  It duplicated what `addConditionalEdges` already expresses; one public
+  branching API survives. Mechanical migration:
+  `addConditionalNode(name, { condition, description })` ≡
+  `addNode(name, { description })` + `addConditionalEdges(name, condition)`.
+
+### Added
+- **Router (passthrough) nodes.** `addNode(name, { description })` with no
+  `execute`/`prompt`/`outputSchema` is a valid branch-point node: it does no
+  work at runtime (returns `{}`) and `serialize()` renders it as a `decision`
+  (the Condition diamond) with its labeled conditional out-edges carrying
+  `conditionalCode` — byte-for-byte the shape `addConditionalNode` produced.
+- **Visible branches on working nodes.** A working node (agent/custom-code)
+  with conditional out-edges now serializes a display-only `<node>__branch`
+  decision node between it and its targets, carrying the branch's
+  `conditionalCode` + labels. Runtime routing is unchanged.
+
 ## [0.1.2] - 2026-05-01
 
 ### Added

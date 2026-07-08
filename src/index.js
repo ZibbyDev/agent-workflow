@@ -43,7 +43,7 @@ export {
 } from './graph.js';
 
 // Node primitives
-export { Node, ConditionalNode } from './node.js';
+export { Node } from './node.js';
 
 // State
 export { WorkflowState } from './state.js';
