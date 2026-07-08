@@ -694,17 +694,75 @@ export class WorkflowGraph {
       }
     }
 
+    // ── Topological node order (display-only) ─────────────────────────
+    // Emit nodes[] in edge-topological order, with the declared order as the
+    // tie-break among "ready" nodes. Consumers rank/lay out against the
+    // serialized order (the cloud viewer's ELK layout uses MODEL_ORDER
+    // strategies, which treat an edge pointing at an EARLIER node as a
+    // back-edge and reverse it) — so a materialized `<node>__branch` decision
+    // pushed AFTER its conditional targets (above) scrambled the layout
+    // (target ranked left of / below the branch diamond). Ordering is a pure
+    // re-sort of the same node objects; edges/nodeConfigs are untouched.
+    // A graph whose declared order is already topological re-emits EXACTLY
+    // that order (each next declared node is always ready + lowest-index), so
+    // existing templates serialize byte-identically. Cyclic graphs (retry
+    // loops) stall Kahn at the cycle; we break the stall at the lowest
+    // declared index so the loop keeps its authored order and only genuine
+    // back-edges point backwards.
+    const orderedNodes = this._topoOrderNodes(nodes, edges);
+
     const runtime    = this._runtimeSchema();
     const stateJson  = toJsonSchema(runtime || this.stateSchema);
     const inputJson  = toJsonSchema(this.inputSchema);
     const ctxJson    = toJsonSchema(this.contextSchema);
 
     return {
-      nodes, edges, nodeConfigs,
+      nodes: orderedNodes, edges, nodeConfigs,
       stateSchema:   stateJson,
       inputSchema:   inputJson,
       contextSchema: ctxJson,
     };
+  }
+
+  // Kahn topological sort of the SERIALIZED node list against the serialized
+  // edges (see serialize() above). Stable: declared order breaks ties among
+  // ready nodes; a cycle stall is broken at the lowest declared index. Always
+  // returns every node exactly once (nothing dropped, nothing duplicated).
+  _topoOrderNodes(nodes, edges) {
+    const declared = new Map(nodes.map((n, i) => [n.id, i]));
+    const byId     = new Map(nodes.map((n) => [n.id, n]));
+    const indeg    = new Map(nodes.map((n) => [n.id, 0]));
+    const out      = new Map(nodes.map((n) => [n.id, []]));
+    for (const e of edges) {
+      if (out.has(e.source) && indeg.has(e.target)) {
+        out.get(e.source).push(e.target);
+        indeg.set(e.target, indeg.get(e.target) + 1);
+      }
+    }
+    const seen = new Set();
+    const remaining = new Set(declared.keys());
+    const ready = [...remaining].filter((id) => indeg.get(id) === 0);
+    const sorted = [];
+    while (sorted.length < nodes.length) {
+      let pick;
+      if (ready.length > 0) {
+        // Lowest declared index among ready — declared order stays the tie-break.
+        ready.sort((a, b) => declared.get(a) - declared.get(b));
+        pick = ready.shift();
+        if (seen.has(pick)) continue; // duplicate push — already emitted
+      } else {
+        // Cycle (retry/back-edge loop): break at the lowest declared index left.
+        pick = [...remaining].sort((a, b) => declared.get(a) - declared.get(b))[0];
+      }
+      seen.add(pick);
+      remaining.delete(pick);
+      sorted.push(byId.get(pick));
+      for (const t of out.get(pick) || []) {
+        indeg.set(t, indeg.get(t) - 1);
+        if (indeg.get(t) <= 0 && !seen.has(t)) ready.push(t);
+      }
+    }
+    return sorted;
   }
 
   // Statically discover the set of node ids a conditional route function can
