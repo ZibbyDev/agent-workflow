@@ -330,6 +330,91 @@ describe('runInProcessSubgraph — happy path (registry pre-populated)', () => {
     });
   });
 
+  it("seeds the child row's nodeConfigs (per-node custom prompts) into the child's initial state", async () => {
+    // Regression guard for the in-process custom-prompt gap (2026-07-08):
+    // a brick's saved nodeConfigOverrides (UI / `zibby agent prompt` / MCP
+    // zibby_set_node_prompt → extraPromptInstructions) are shipped by the
+    // cold-start path via the per-run sources payload and seeded as
+    // `state.nodeConfigs`. The in-process path must do the same from the
+    // begin response's `nodeConfigs`, or wrapped bricks silently ignore
+    // their custom prompts (same gap class as env inheritance).
+    const childOverrides = {
+      review: { extraPromptInstructions: '写全中文评审;第一行必须以【测试标记】开头。' },
+    };
+    mockFetch(async (url) => {
+      const selfMajor = (process.versions?.node || '').split('.')[0];
+      const matchingTag = `node${selfMajor}-${process.platform}-${process.arch}`;
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return jsonResp({
+          childExecutionId: 'child-nco',
+          runtimeTag: matchingTag,
+          bundlePresignedUrl: 'x', sourcesPresignedUrl: 'x',
+          workflowVersion: 1, workflowUuid: 'u', bundleReady: true,
+          nodeConfigs: childOverrides,
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error('unexpected');
+    });
+    let seenInitialState = null;
+    const FakeAgentClass = class {
+      buildGraph() {
+        return {
+          run: async (_agent, initialState) => {
+            seenInitialState = initialState;
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    };
+    registry.register('nco-child', FakeAgentClass);
+
+    await runInProcessSubgraph('nco-child', { input: { mrUrl: 'https://x/mr/1' } });
+
+    expect(seenInitialState).toBeDefined();
+    // Input still layered in…
+    expect(seenInitialState.mrUrl).toBe('https://x/mr/1');
+    // …and the child row's overrides ride along as state.nodeConfigs —
+    // the exact key graph.js reads per node into _currentNodeConfig.
+    expect(seenInitialState.nodeConfigs).toEqual(childOverrides);
+  });
+
+  it('omits nodeConfigs from the child initial state when begin returns none/empty', async () => {
+    mockFetch(async (url) => {
+      const selfMajor = (process.versions?.node || '').split('.')[0];
+      const matchingTag = `node${selfMajor}-${process.platform}-${process.arch}`;
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return jsonResp({
+          childExecutionId: 'child-nco-empty',
+          runtimeTag: matchingTag,
+          bundlePresignedUrl: 'x', sourcesPresignedUrl: 'x',
+          workflowVersion: 1, workflowUuid: 'u', bundleReady: true,
+          nodeConfigs: {}, // backend returns {} when the row has no overrides
+        });
+      }
+      if (url.endsWith('/internal/subgraph/finalize')) return jsonResp({ ok: true });
+      throw new Error('unexpected');
+    });
+    let seenInitialState = null;
+    const FakeAgentClass = class {
+      buildGraph() {
+        return {
+          run: async (_agent, initialState) => {
+            seenInitialState = initialState;
+            return { success: true, state: { ok: true } };
+          },
+        };
+      }
+    };
+    registry.register('nco-empty-child', FakeAgentClass);
+
+    await runInProcessSubgraph('nco-empty-child', { input: { a: 1 } });
+
+    // Byte-identical to pre-fix behavior: no stray key on the state.
+    expect(Object.prototype.hasOwnProperty.call(seenInitialState, 'nodeConfigs')).toBe(false);
+    expect(seenInitialState.a).toBe(1);
+  });
+
   it('plain return value (not wrapped) is treated as finalState verbatim', async () => {
     // Defensive shape: if a custom graph.run somehow returns the state
     // map directly without the wrapper, do not break — pass it through.

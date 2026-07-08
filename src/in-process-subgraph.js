@@ -337,6 +337,7 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
     workflowVersion,
     workflowUuid,
     bundleReady,
+    nodeConfigs,
   } = begin;
 
   // 2. Runtime compatibility check.
@@ -439,8 +440,22 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
   // context, then layer the child's input on top. The child workflow's
   // contextSchema fields (workspace, repos, githubToken, etc.) are
   // already on the env — graph.run picks them up from there.
+  //
+  // `nodeConfigs` — the CHILD row's saved per-node config overrides
+  // (custom prompts / extraPromptInstructions edited via UI / `zibby agent
+  // prompt` / MCP). On a cold-start run the runner (cli run.js) seeds
+  // `state.nodeConfigs` from the per-run sources payload and the engine
+  // overlays it per node (graph.js `_currentNodeConfig` → strategy-registry
+  // PRIORITY OVERRIDE). The in-process path has no per-run payload, so the
+  // begin endpoint returns the row's overrides and we seed the same key
+  // here — WITHOUT this, a brick's saved custom prompt silently doesn't
+  // apply when it runs as an in-process child of a wrapper. Older backends
+  // that don't return `nodeConfigs` → key omitted, byte-identical to before.
+  const hasChildNodeConfigs = nodeConfigs && typeof nodeConfigs === 'object'
+    && !Array.isArray(nodeConfigs) && Object.keys(nodeConfigs).length > 0;
   const childInitialState = {
     ...(options.input || {}),
+    ...(hasChildNodeConfigs ? { nodeConfigs } : {}),
   };
 
   // childGraph.run() returns the run *result* wrapper:
