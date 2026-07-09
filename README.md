@@ -9,12 +9,12 @@
 
 📖 **Full docs:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **The cloud pipeline for Claude Code, Cursor, Codex, and Gemini.** Compose them into structured workflows with Zod-validated handoff between nodes. Vendor-neutral, JavaScript-first, runs locally or in our cloud.
+> **The cloud pipeline for Claude Code, Codex, and Gemini.** Compose them into structured workflows with Zod-validated handoff between nodes. Vendor-neutral, JavaScript-first, runs locally or in our cloud.
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
    trigger  →   │  plan    │ →  │ implement│ →  │  verify  │   →  result
-                │ (claude) │    │ (cursor) │    │ (codex)  │
+                │ (claude) │    │ (codex)  │    │ (gemini) │
                 └──────────┘    └──────────┘    └──────────┘
                      │               │               │
                   Zod out         Zod out         Zod out
@@ -22,16 +22,16 @@
 
 Each node hands off to a complete agent. The agent does its own tool calls, file edits, and multi-turn reasoning. Your graph defines *what* agent runs *when*, *what schema* it has to return, and *what state* flows between them.
 
-Mix and match agents per node — Claude for planning, Cursor for implementation, Codex for verification. Or stick with one. Your call:
+Mix and match agents per node — Claude for planning, Codex for implementation, Gemini for verification. Or stick with one. Your call:
 
 ```js
 graph
   .addNode('plan',      { prompt, outputSchema: Plan,   agent: 'claude' })
-  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
-  .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
+  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'codex'  })
+  .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-Each agent reads its own credential env var (`ANTHROPIC_API_KEY`, `CURSOR_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** you can set those per-workflow — different keys per pipeline, no global state — see [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-node `model` overrides come from `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), which the CLI ships to cloud as part of the deploy bundle.
+Each agent reads its own credential env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** you can set those per-workflow — different keys per pipeline, no global state — see [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-node `model` overrides come from `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), which the CLI ships to cloud as part of the deploy bundle.
 
 ---
 
@@ -140,11 +140,11 @@ See [`examples/`](./examples/) for runnable demos of each pattern.
 
 | | What it does | Why this is different |
 |---|---|---|
-| **LangGraph** | Python-first graph runtime over LangChain — nodes are LangChain agents or LLM calls, state is shared via the graph. | Our nodes hand off to **external coding-agent CLIs** (Claude Code, cursor-agent, OpenAI Codex SDK) — independent processes that own their own tool use, multi-turn loops, and file edits. JS-first, no Python interop, no LangChain assembly. |
+| **LangGraph** | Python-first graph runtime over LangChain — nodes are LangChain agents or LLM calls, state is shared via the graph. | Our nodes hand off to **external coding-agent CLIs** (Claude Code, OpenAI Codex, Gemini CLI) — independent processes that own their own tool use, multi-turn loops, and file edits. JS-first, no Python interop, no LangChain assembly. |
 | **n8n / Zapier** | Visual workflow editor — wire SaaS APIs together. | Code-first, no UI. Built around composing coding-agent CLIs against your repo, not connecting SaaS APIs. |
 | **CrewAI / AutoGen** | Multi-agent role-play — agents converse to solve a task. | No agent debate. Each node is a discrete, schema-validated invocation. Deterministic edges, retry-friendly. |
 
-If you want to compose Claude Code + Cursor + Codex into one pipeline with structured handoff between them — JS, no Python, no LangChain — this is that.
+If you want to compose Claude Code + Codex + Gemini into one pipeline with structured handoff between them — JS, no Python, no LangChain — this is that.
 
 ---
 
@@ -238,7 +238,7 @@ Examples 01–03 and 05 use a fake agent — no API key required.
 
 ## Why graph-of-agents
 
-Real coding agents (Claude Code, cursor-agent, OpenAI Codex CLI) are themselves capable runtimes — they edit files, run shells, call MCP tools, handle multi-turn. But on their own they have no memory across runs and no way to verify their own output.
+Real coding agents (Claude Code, OpenAI Codex, Gemini CLI) are themselves capable runtimes — they edit files, run shells, call MCP tools, handle multi-turn. But on their own they have no memory across runs and no way to verify their own output.
 
 A graph gives you:
 
@@ -258,7 +258,7 @@ You're not replacing the agent. You're giving it a job description, a contract, 
 | Package | What it adds |
 |---|---|
 | [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby` command — scaffold, dev server, deploy, trigger, logs. |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | Built-in agent strategies (Claude / Cursor / Codex / Gemini / OpenAI Assistant), MCP client, runtime. |
+| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | Built-in agent strategies (Claude / Codex / Gemini / OpenAI Assistant), MCP client, runtime. |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | Pre-built skills (browser via Playwright MCP, GitHub, Jira, Slack, memory). |
 
 Workflow itself ships **zero agent strategies and zero skills** — bring your own, or `npm install @zibby/core @zibby/skills` for the batteries-included experience.

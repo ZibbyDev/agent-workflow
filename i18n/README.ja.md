@@ -9,12 +9,12 @@
 
 📖 **完全なドキュメント:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **Claude Code、Cursor、Codex、Gemini のためのクラウドパイプライン。** ノード間で Zod により検証されるハンドオフを備えた構造化ワークフローへとそれらを組み合わせます。ベンダー中立、JavaScript ファースト、ローカルでも当社のクラウドでも動作します。
+> **Claude Code、Codex、Gemini のためのクラウドパイプライン。** ノード間で Zod により検証されるハンドオフを備えた構造化ワークフローへとそれらを組み合わせます。ベンダー中立、JavaScript ファースト、ローカルでも当社のクラウドでも動作します。
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
    trigger  →   │  plan    │ →  │ implement│ →  │  verify  │   →  result
-                │ (claude) │    │ (cursor) │    │ (codex)  │
+                │ (claude) │    │ (codex)  │    │ (gemini) │
                 └──────────┘    └──────────┘    └──────────┘
                      │               │               │
                   Zod out         Zod out         Zod out
@@ -22,16 +22,16 @@
 
 各ノードは完全なエージェントへとハンドオフします。エージェントは自身のツール呼び出し、ファイル編集、そして複数ターンの推論を行います。あなたのグラフは、*どの*エージェントを*いつ*実行するか、*どんなスキーマ*を返さなければならないか、そしてそれらの間で*どんな state* が流れるかを定義します。
 
-ノードごとにエージェントを自由に組み合わせられます — プランニングには Claude、実装には Cursor、検証には Codex。あるいは 1 つに統一してもかまいません。あなた次第です:
+ノードごとにエージェントを自由に組み合わせられます — プランニングには Claude、実装には Codex、検証には Gemini。あるいは 1 つに統一してもかまいません。あなた次第です:
 
 ```js
 graph
   .addNode('plan',      { prompt, outputSchema: Plan,   agent: 'claude' })
-  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
-  .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
+  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'codex'  })
+  .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-各エージェントは自身の認証情報の環境変数（`ANTHROPIC_API_KEY`、`CURSOR_API_KEY`、`OPENAI_API_KEY`）を読み取ります。**Zibby Cloud** では、それらをワークフローごとに設定できます — パイプラインごとに異なるキー、グローバルな状態なし — [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars) を参照してください。ノードごとの `model` のオーバーライドは `.zibby.config.mjs`（`models: { node_id: 'claude-opus-4.6' }`）から取得され、CLI がデプロイバンドルの一部としてクラウドへ送出します。
+各エージェントは自身の認証情報の環境変数（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`）を読み取ります。**Zibby Cloud** では、それらをワークフローごとに設定できます — パイプラインごとに異なるキー、グローバルな状態なし — [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars) を参照してください。ノードごとの `model` のオーバーライドは `.zibby.config.mjs`（`models: { node_id: 'claude-opus-4.6' }`）から取得され、CLI がデプロイバンドルの一部としてクラウドへ送出します。
 
 ---
 
@@ -140,11 +140,11 @@ console.log(state.finish.summary);
 
 | | 何をするか | これがどう違うか |
 |---|---|---|
-| **LangGraph** | LangChain 上の Python ファーストのグラフランタイム — ノードは LangChain エージェントまたは LLM 呼び出しで、state はグラフを通じて共有されます。 | 当社のノードは**外部のコーディングエージェント CLI**（Claude Code、cursor-agent、OpenAI Codex SDK）へとハンドオフします — 独立したプロセスで、自身のツール使用、複数ターンのループ、ファイル編集を所有します。JS ファースト、Python 連携なし、LangChain の組み立てなし。 |
+| **LangGraph** | LangChain 上の Python ファーストのグラフランタイム — ノードは LangChain エージェントまたは LLM 呼び出しで、state はグラフを通じて共有されます。 | 当社のノードは**外部のコーディングエージェント CLI**（Claude Code、OpenAI Codex、Gemini CLI）へとハンドオフします — 独立したプロセスで、自身のツール使用、複数ターンのループ、ファイル編集を所有します。JS ファースト、Python 連携なし、LangChain の組み立てなし。 |
 | **n8n / Zapier** | ビジュアルワークフローエディタ — SaaS API を配線でつなぎます。 | コードファースト、UI なし。SaaS API をつなぐのではなく、リポジトリに対してコーディングエージェント CLI を組み合わせることを軸に構築されています。 |
 | **CrewAI / AutoGen** | マルチエージェントのロールプレイ — エージェントが会話してタスクを解決します。 | エージェントの議論はありません。各ノードは個別の、スキーマ検証された呼び出しです。決定論的なエッジ、リトライに適しています。 |
 
-Claude Code + Cursor + Codex を、それらの間の構造化されたハンドオフを伴う 1 つのパイプラインに組み合わせたい — JS で、Python なし、LangChain なし — それがこれです。
+Claude Code + Codex + Gemini を、それらの間の構造化されたハンドオフを伴う 1 つのパイプラインに組み合わせたい — JS で、Python なし、LangChain なし — それがこれです。
 
 ---
 
@@ -238,7 +238,7 @@ node index.js
 
 ## なぜエージェントのグラフなのか
 
-実際のコーディングエージェント（Claude Code、cursor-agent、OpenAI Codex CLI）はそれ自体が有能なランタイムです — ファイルを編集し、シェルを実行し、MCP ツールを呼び出し、複数ターンを扱います。しかし単独では、実行をまたいだメモリがなく、自身の出力を検証する手段がありません。
+実際のコーディングエージェント（Claude Code、OpenAI Codex、Gemini CLI）はそれ自体が有能なランタイムです — ファイルを編集し、シェルを実行し、MCP ツールを呼び出し、複数ターンを扱います。しかし単独では、実行をまたいだメモリがなく、自身の出力を検証する手段がありません。
 
 グラフは次を与えます:
 
@@ -258,7 +258,7 @@ node index.js
 | パッケージ | 何を加えるか |
 |---|---|
 | [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby` コマンド — スキャフォールド、開発サーバー、deploy、trigger、logs。 |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 組み込みのエージェントストラテジー（Claude / Cursor / Codex / Gemini / OpenAI Assistant）、MCP クライアント、ランタイム。 |
+| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 組み込みのエージェントストラテジー（Claude / Codex / Gemini / OpenAI Assistant）、MCP クライアント、ランタイム。 |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | 事前構築済みのスキル（Playwright MCP 経由のブラウザ、GitHub、Jira、Slack、メモリ）。 |
 
 Workflow 自体は**ゼロのエージェントストラテジーとゼロのスキル**を同梱します — 自分で持ち込むか、バッテリー同梱の体験には `npm install @zibby/core @zibby/skills` を実行してください。

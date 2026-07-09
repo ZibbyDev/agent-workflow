@@ -9,12 +9,12 @@
 
 📖 **完整文档：** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **面向 Claude Code、Cursor、Codex 和 Gemini 的云端流水线。** 将它们组合成结构化的工作流，节点之间通过 Zod 校验的 handoff 进行交接。供应商中立、JavaScript 优先，可在本地或我们的云中运行。
+> **面向 Claude Code、Codex 和 Gemini 的云端流水线。** 将它们组合成结构化的工作流，节点之间通过 Zod 校验的 handoff 进行交接。供应商中立、JavaScript 优先，可在本地或我们的云中运行。
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
    trigger  →   │  plan    │ →  │ implement│ →  │  verify  │   →  result
-                │ (claude) │    │ (cursor) │    │ (codex)  │
+                │ (claude) │    │ (codex)  │    │ (gemini) │
                 └──────────┘    └──────────┘    └──────────┘
                      │               │               │
                   Zod out         Zod out         Zod out
@@ -22,16 +22,16 @@
 
 每个节点都将控制权交接给一个完整的代理。代理自行完成工具调用、文件编辑和多轮推理。你的图定义了*哪个*代理在*何时*运行、它*必须返回什么 schema*，以及*什么状态*在它们之间流动。
 
-按节点混搭代理——用 Claude 做规划、Cursor 做实现、Codex 做验证。或者只用一个。由你决定：
+按节点混搭代理——用 Claude 做规划、Codex 做实现、Gemini 做验证。或者只用一个。由你决定：
 
 ```js
 graph
   .addNode('plan',      { prompt, outputSchema: Plan,   agent: 'claude' })
-  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
-  .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
+  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'codex'  })
+  .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-每个代理读取自己的凭证环境变量（`ANTHROPIC_API_KEY`、`CURSOR_API_KEY`、`OPENAI_API_KEY`）。在 **Zibby Cloud** 中，你可以按工作流分别设置这些变量——每条流水线使用不同的密钥，没有全局状态——参见 [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars)。各节点的 `model` 覆盖来自 `.zibby.config.mjs`（`models: { node_id: 'claude-opus-4.6' }`），CLI 会将其作为部署包的一部分发送到云端。
+每个代理读取自己的凭证环境变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`）。在 **Zibby Cloud** 中，你可以按工作流分别设置这些变量——每条流水线使用不同的密钥，没有全局状态——参见 [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars)。各节点的 `model` 覆盖来自 `.zibby.config.mjs`（`models: { node_id: 'claude-opus-4.6' }`），CLI 会将其作为部署包的一部分发送到云端。
 
 ---
 
@@ -140,11 +140,11 @@ console.log(state.finish.summary);
 
 | | 它做什么 | 我们为何不同 |
 |---|---|---|
-| **LangGraph** | 在 LangChain 之上的 Python 优先图运行时——节点是 LangChain 代理或 LLM 调用，状态通过图共享。 | 我们的节点交接给**外部编码代理 CLI**（Claude Code、cursor-agent、OpenAI Codex SDK）——独立进程，自行掌控工具使用、多轮循环和文件编辑。JS 优先，不与 Python 互操作，不组装 LangChain。 |
+| **LangGraph** | 在 LangChain 之上的 Python 优先图运行时——节点是 LangChain 代理或 LLM 调用，状态通过图共享。 | 我们的节点交接给**外部编码代理 CLI**（Claude Code、OpenAI Codex、Gemini CLI）——独立进程，自行掌控工具使用、多轮循环和文件编辑。JS 优先，不与 Python 互操作，不组装 LangChain。 |
 | **n8n / Zapier** | 可视化工作流编辑器——把 SaaS API 连接起来。 | 代码优先，无 UI。围绕针对你的仓库组合编码代理 CLI 而构建，而非连接 SaaS API。 |
 | **CrewAI / AutoGen** | 多代理角色扮演——代理通过对话来解决任务。 | 没有代理辩论。每个节点都是离散的、经 schema 校验的调用。确定性的边，易于重试。 |
 
-如果你想把 Claude Code + Cursor + Codex 组合进一条流水线，并在它们之间做结构化交接——JS、无 Python、无 LangChain——这就是它。
+如果你想把 Claude Code + Codex + Gemini 组合进一条流水线，并在它们之间做结构化交接——JS、无 Python、无 LangChain——这就是它。
 
 ---
 
@@ -238,7 +238,7 @@ node index.js
 
 ## 为何要用代理图
 
-真正的编码代理（Claude Code、cursor-agent、OpenAI Codex CLI）本身就是有能力的运行时——它们编辑文件、运行 shell、调用 MCP 工具、处理多轮。但单凭自身，它们跨运行没有记忆，也无法验证自己的输出。
+真正的编码代理（Claude Code、OpenAI Codex、Gemini CLI）本身就是有能力的运行时——它们编辑文件、运行 shell、调用 MCP 工具、处理多轮。但单凭自身，它们跨运行没有记忆，也无法验证自己的输出。
 
 图给你带来：
 
@@ -258,7 +258,7 @@ node index.js
 | 包 | 它增加了什么 |
 |---|---|
 | [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby` 命令——脚手架、开发服务器、部署、触发、日志。 |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 内置代理策略（Claude / Cursor / Codex / Gemini / OpenAI Assistant）、MCP 客户端、运行时。 |
+| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 内置代理策略（Claude / Codex / Gemini / OpenAI Assistant）、MCP 客户端、运行时。 |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | 预构建技能（通过 Playwright MCP 的浏览器、GitHub、Jira、Slack、记忆）。 |
 
 workflow 本身**不附带任何代理策略，也不附带任何技能**——自带你自己的，或者 `npm install @zibby/core @zibby/skills` 以获得开箱即用的体验。

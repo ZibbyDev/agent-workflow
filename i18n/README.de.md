@@ -9,12 +9,12 @@
 
 📖 **Vollständige Dokumentation:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **Die Cloud-Pipeline für Claude Code, Cursor, Codex und Gemini.** Setze sie zu strukturierten Workflows zusammen, mit Zod-validierter Übergabe (Handoff) zwischen den Nodes. Anbieterneutral, JavaScript-first, läuft lokal oder in unserer Cloud.
+> **Die Cloud-Pipeline für Claude Code, Codex und Gemini.** Setze sie zu strukturierten Workflows zusammen, mit Zod-validierter Übergabe (Handoff) zwischen den Nodes. Anbieterneutral, JavaScript-first, läuft lokal oder in unserer Cloud.
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
    trigger  →   │  plan    │ →  │ implement│ →  │  verify  │   →  result
-                │ (claude) │    │ (cursor) │    │ (codex)  │
+                │ (claude) │    │ (codex)  │    │ (gemini) │
                 └──────────┘    └──────────┘    └──────────┘
                      │               │               │
                   Zod out         Zod out         Zod out
@@ -22,16 +22,16 @@
 
 Jeder Node übergibt an einen vollständigen Agenten. Der Agent erledigt seine eigenen Tool-Aufrufe, Datei-Änderungen und sein mehrstufiges Reasoning. Dein Graph definiert, *welcher* Agent *wann* läuft, *welches Schema* er zurückgeben muss und *welcher State* zwischen ihnen fließt.
 
-Kombiniere Agenten beliebig pro Node — Claude für die Planung, Cursor für die Umsetzung, Codex für die Verifikation. Oder bleib bei einem einzigen. Deine Entscheidung:
+Kombiniere Agenten beliebig pro Node — Claude für die Planung, Codex für die Umsetzung, Gemini für die Verifikation. Oder bleib bei einem einzigen. Deine Entscheidung:
 
 ```js
 graph
   .addNode('plan',      { prompt, outputSchema: Plan,   agent: 'claude' })
-  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
-  .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
+  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'codex'  })
+  .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-Jeder Agent liest seine eigene Credential-Umgebungsvariable (`ANTHROPIC_API_KEY`, `CURSOR_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** kannst du diese pro Workflow setzen — unterschiedliche Keys pro Pipeline, kein globaler State — siehe [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-Node-`model`-Overrides kommen aus `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), das die CLI als Teil des Deploy-Bundles in die Cloud mitliefert.
+Jeder Agent liest seine eigene Credential-Umgebungsvariable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** kannst du diese pro Workflow setzen — unterschiedliche Keys pro Pipeline, kein globaler State — siehe [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-Node-`model`-Overrides kommen aus `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), das die CLI als Teil des Deploy-Bundles in die Cloud mitliefert.
 
 ---
 
@@ -140,11 +140,11 @@ Siehe [`examples/`](../examples/) für lauffähige Demos zu jedem Muster.
 
 | | Was es tut | Warum dies anders ist |
 |---|---|---|
-| **LangGraph** | Python-first-Graph-Runtime über LangChain — Nodes sind LangChain-Agenten oder LLM-Aufrufe, der State wird über den Graphen geteilt. | Unsere Nodes übergeben an **externe Coding-Agent-CLIs** (Claude Code, cursor-agent, OpenAI Codex SDK) — eigenständige Prozesse, die ihre eigene Tool-Nutzung, ihre Multi-Turn-Schleifen und ihre Datei-Änderungen besitzen. JS-first, keine Python-Interop, kein LangChain-Zusammenbau. |
+| **LangGraph** | Python-first-Graph-Runtime über LangChain — Nodes sind LangChain-Agenten oder LLM-Aufrufe, der State wird über den Graphen geteilt. | Unsere Nodes übergeben an **externe Coding-Agent-CLIs** (Claude Code, OpenAI Codex, Gemini CLI) — eigenständige Prozesse, die ihre eigene Tool-Nutzung, ihre Multi-Turn-Schleifen und ihre Datei-Änderungen besitzen. JS-first, keine Python-Interop, kein LangChain-Zusammenbau. |
 | **n8n / Zapier** | Visueller Workflow-Editor — verdrahte SaaS-APIs miteinander. | Code-first, keine UI. Aufgebaut auf das Zusammensetzen von Coding-Agent-CLIs gegen dein Repo, nicht auf das Verbinden von SaaS-APIs. |
 | **CrewAI / AutoGen** | Multi-Agent-Rollenspiel — Agenten unterhalten sich, um eine Aufgabe zu lösen. | Keine Agenten-Debatte. Jeder Node ist eine diskrete, schema-validierte Invocation. Deterministische Edges, retry-freundlich. |
 
-Wenn du Claude Code + Cursor + Codex zu einer Pipeline mit strukturierter Übergabe zwischen ihnen zusammensetzen willst — JS, kein Python, kein LangChain — dann ist es genau das.
+Wenn du Claude Code + Codex + Gemini zu einer Pipeline mit strukturierter Übergabe zwischen ihnen zusammensetzen willst — JS, kein Python, kein LangChain — dann ist es genau das.
 
 ---
 
@@ -238,7 +238,7 @@ Die Beispiele 01–03 und 05 verwenden einen Fake-Agenten — kein API-Key erfor
 
 ## Warum graph-of-agents
 
-Echte Coding-Agenten (Claude Code, cursor-agent, OpenAI Codex CLI) sind selbst leistungsfähige Runtimes — sie bearbeiten Dateien, führen Shells aus, rufen MCP-Tools auf, bewältigen Multi-Turn. Aber für sich allein haben sie kein Gedächtnis über Läufe hinweg und keine Möglichkeit, ihre eigene Ausgabe zu verifizieren.
+Echte Coding-Agenten (Claude Code, OpenAI Codex, Gemini CLI) sind selbst leistungsfähige Runtimes — sie bearbeiten Dateien, führen Shells aus, rufen MCP-Tools auf, bewältigen Multi-Turn. Aber für sich allein haben sie kein Gedächtnis über Läufe hinweg und keine Möglichkeit, ihre eigene Ausgabe zu verifizieren.
 
 Ein Graph gibt dir:
 
@@ -258,7 +258,7 @@ Du ersetzt den Agenten nicht. Du gibst ihm eine Stellenbeschreibung, einen Vertr
 | Paket | Was es hinzufügt |
 |---|---|
 | [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby`-Befehl — Scaffolding, Dev-Server, Deploy, Trigger, Logs. |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | Eingebaute Agenten-Strategien (Claude / Cursor / Codex / Gemini / OpenAI Assistant), MCP-Client, Runtime. |
+| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | Eingebaute Agenten-Strategien (Claude / Codex / Gemini / OpenAI Assistant), MCP-Client, Runtime. |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | Vorgefertigte Skills (Browser via Playwright MCP, GitHub, Jira, Slack, Memory). |
 
 Workflow selbst liefert **null Agenten-Strategien und null Skills** — bring deine eigenen mit, oder `npm install @zibby/core @zibby/skills` für das Batteries-included-Erlebnis.

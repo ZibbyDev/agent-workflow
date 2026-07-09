@@ -958,7 +958,11 @@ export class WorkflowGraph {
       else if (ac?.claude) agentType = 'claude';
       else if (ac?.cursor) agentType = 'cursor';
       else if (ac?.codex)  agentType = 'codex';
-      else agentType = process.env.AGENT_TYPE || 'cursor';
+      // Default agent when a node pins none: Claude Code. (Was 'cursor' — but
+      // Cursor isn't a supported/advertised vendor, so an unpinned node would
+      // default to a cursor-agent CLI that isn't installed and crash. Cursor
+      // stays available as an EXPLICIT opt-in via ac?.cursor above.)
+      else agentType = process.env.AGENT_TYPE || 'claude';
     }
 
     const contextConfig = initialState.contextConfig

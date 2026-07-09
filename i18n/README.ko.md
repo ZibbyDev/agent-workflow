@@ -9,12 +9,12 @@
 
 📖 **전체 문서:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
-> **Claude Code, Cursor, Codex, Gemini를 위한 클라우드 파이프라인.** 노드 간에 Zod로 검증되는 핸드오프를 갖춘 구조화된 워크플로로 이들을 조합하세요. 벤더 중립적이며, JavaScript 우선이고, 로컬에서도 당사 클라우드에서도 실행됩니다.
+> **Claude Code, Codex, Gemini를 위한 클라우드 파이프라인.** 노드 간에 Zod로 검증되는 핸드오프를 갖춘 구조화된 워크플로로 이들을 조합하세요. 벤더 중립적이며, JavaScript 우선이고, 로컬에서도 당사 클라우드에서도 실행됩니다.
 
 ```
                 ┌──────────┐    ┌──────────┐    ┌──────────┐
    trigger  →   │  plan    │ →  │ implement│ →  │  verify  │   →  result
-                │ (claude) │    │ (cursor) │    │ (codex)  │
+                │ (claude) │    │ (codex)  │    │ (gemini) │
                 └──────────┘    └──────────┘    └──────────┘
                      │               │               │
                   Zod out         Zod out         Zod out
@@ -22,16 +22,16 @@
 
 각 노드는 완전한 에이전트에게 핸드오프합니다. 에이전트는 자체적으로 도구 호출, 파일 편집, 다중 턴 추론을 수행합니다. 당신의 그래프는 *어떤* 에이전트가 *언제* 실행되는지, *어떤 스키마*를 반환해야 하는지, 그리고 그들 사이에 *어떤 state*가 흐르는지를 정의합니다.
 
-노드마다 에이전트를 자유롭게 섞고 맞추세요 — 계획에는 Claude, 구현에는 Cursor, 검증에는 Codex. 또는 하나로 통일해도 됩니다. 당신의 선택입니다:
+노드마다 에이전트를 자유롭게 섞고 맞추세요 — 계획에는 Claude, 구현에는 Codex, 검증에는 Gemini. 또는 하나로 통일해도 됩니다. 당신의 선택입니다:
 
 ```js
 graph
   .addNode('plan',      { prompt, outputSchema: Plan,   agent: 'claude' })
-  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'cursor' })
-  .addNode('verify',    { prompt, outputSchema: Result, agent: 'codex'  });
+  .addNode('implement', { prompt, outputSchema: Diff,   agent: 'codex'  })
+  .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-각 에이전트는 자신의 자격 증명 환경 변수(`ANTHROPIC_API_KEY`, `CURSOR_API_KEY`, `OPENAI_API_KEY`)를 읽습니다. **Zibby Cloud**에서는 이들을 워크플로별로 설정할 수 있습니다 — 파이프라인마다 다른 키, 전역 상태 없음 — [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars)를 참고하세요. 노드별 `model` 재정의는 `.zibby.config.mjs`(`models: { node_id: 'claude-opus-4.6' }`)에서 가져오며, CLI가 배포 번들의 일부로 클라우드에 전달합니다.
+각 에이전트는 자신의 자격 증명 환경 변수(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)를 읽습니다. **Zibby Cloud**에서는 이들을 워크플로별로 설정할 수 있습니다 — 파이프라인마다 다른 키, 전역 상태 없음 — [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars)를 참고하세요. 노드별 `model` 재정의는 `.zibby.config.mjs`(`models: { node_id: 'claude-opus-4.6' }`)에서 가져오며, CLI가 배포 번들의 일부로 클라우드에 전달합니다.
 
 ---
 
@@ -140,11 +140,11 @@ console.log(state.finish.summary);
 
 | | 하는 일 | 무엇이 다른가 |
 |---|---|---|
-| **LangGraph** | LangChain 위의 Python 우선 그래프 런타임 — 노드는 LangChain 에이전트 또는 LLM 호출이며, state는 그래프를 통해 공유됩니다. | 당사의 노드는 **외부 코딩 에이전트 CLI**(Claude Code, cursor-agent, OpenAI Codex SDK)에게 핸드오프합니다 — 자체 도구 사용, 다중 턴 루프, 파일 편집을 소유하는 독립 프로세스입니다. JS 우선, Python 상호 운용 없음, LangChain 조립 없음. |
+| **LangGraph** | LangChain 위의 Python 우선 그래프 런타임 — 노드는 LangChain 에이전트 또는 LLM 호출이며, state는 그래프를 통해 공유됩니다. | 당사의 노드는 **외부 코딩 에이전트 CLI**(Claude Code, OpenAI Codex, Gemini CLI)에게 핸드오프합니다 — 자체 도구 사용, 다중 턴 루프, 파일 편집을 소유하는 독립 프로세스입니다. JS 우선, Python 상호 운용 없음, LangChain 조립 없음. |
 | **n8n / Zapier** | 비주얼 워크플로 편집기 — SaaS API를 배선으로 연결합니다. | 코드 우선, UI 없음. SaaS API를 연결하는 것이 아니라, 당신의 저장소에 대해 코딩 에이전트 CLI를 조합하는 것을 중심으로 구축되었습니다. |
 | **CrewAI / AutoGen** | 멀티 에이전트 역할극 — 에이전트들이 대화하여 작업을 해결합니다. | 에이전트 토론이 없습니다. 각 노드는 개별적이고 스키마로 검증된 호출입니다. 결정론적 엣지, 재시도에 적합. |
 
-Claude Code + Cursor + Codex를 그들 사이의 구조화된 핸드오프와 함께 하나의 파이프라인으로 조합하고 싶다면 — JS로, Python 없이, LangChain 없이 — 바로 이것입니다.
+Claude Code + Codex + Gemini를 그들 사이의 구조화된 핸드오프와 함께 하나의 파이프라인으로 조합하고 싶다면 — JS로, Python 없이, LangChain 없이 — 바로 이것입니다.
 
 ---
 
@@ -238,7 +238,7 @@ node index.js
 
 ## 왜 에이전트의 그래프인가
 
-실제 코딩 에이전트(Claude Code, cursor-agent, OpenAI Codex CLI)는 그 자체로 유능한 런타임입니다 — 파일을 편집하고, 셸을 실행하고, MCP 도구를 호출하고, 다중 턴을 처리합니다. 그러나 단독으로는 실행 간 메모리가 없고 자신의 출력을 검증할 방법이 없습니다.
+실제 코딩 에이전트(Claude Code, OpenAI Codex, Gemini CLI)는 그 자체로 유능한 런타임입니다 — 파일을 편집하고, 셸을 실행하고, MCP 도구를 호출하고, 다중 턴을 처리합니다. 그러나 단독으로는 실행 간 메모리가 없고 자신의 출력을 검증할 방법이 없습니다.
 
 그래프는 다음을 제공합니다:
 
@@ -258,7 +258,7 @@ node index.js
 | 패키지 | 추가하는 것 |
 |---|---|
 | [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby` 명령 — 스캐폴딩, 개발 서버, deploy, trigger, logs. |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 내장 에이전트 스트래티지(Claude / Cursor / Codex / Gemini / OpenAI Assistant), MCP 클라이언트, 런타임. |
+| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | 내장 에이전트 스트래티지(Claude / Codex / Gemini / OpenAI Assistant), MCP 클라이언트, 런타임. |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | 사전 구축된 스킬(Playwright MCP를 통한 브라우저, GitHub, Jira, Slack, 메모리). |
 
 Workflow 자체는 **제로 에이전트 스트래티지와 제로 스킬**을 제공합니다 — 직접 가져오거나, 배터리 포함 경험을 위해 `npm install @zibby/core @zibby/skills`를 실행하세요.
