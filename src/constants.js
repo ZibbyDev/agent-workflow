@@ -181,6 +181,14 @@ export const SKILLS = {
   // no requiresIntegration → never gates deploy. The id MUST match the
   // skill's registered id ('trigger-agent').
   TRIGGER_AGENT:    'trigger-agent',
+  // `code-scan` — AGENT-DRIVEN, stack-smart deterministic linter (codeScanSkill
+  // in @zibby/skills → scan_code): detects the repo's stack and runs the matching
+  // baked linter (oxlint for JS/TS, …), returns structured findings. Like
+  // codebase-memory it needs NO integration/token (runs locally on the agent
+  // image), so it is a "no-connection toggleable skill" — see
+  // NO_INTEGRATION_TOGGLEABLE_SKILL_IDS below, default ON. The id MUST match the
+  // skill's registered id ('code-scan').
+  CODE_SCAN:        'code-scan',
 };
 
 /**
@@ -200,6 +208,7 @@ export const SKILLS = {
  */
 export const NO_INTEGRATION_TOGGLEABLE_SKILL_IDS = Object.freeze([
   SKILLS.CODEBASE_MEMORY,
+  SKILLS.CODE_SCAN,
 ]);
 
 /** CI env vars checked when generating session IDs. */
