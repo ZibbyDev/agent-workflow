@@ -49,6 +49,7 @@ export const NO_INTEGRATION_TOGGLEABLE_SKILL_IDS = Object.freeze([
   // this list with skill.meta.toggleable — see the strategy doc.
   'codebase-memory',
   'code-scan',
+  'artifact',
 ]);
 
 /** CI env vars checked when generating session IDs. */
