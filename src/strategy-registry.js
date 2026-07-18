@@ -64,6 +64,28 @@ export function listStrategies() {
  * @param {object} [context]
  * @returns {AgentStrategy}
  */
+/**
+ * The ONE place an invocation's model is resolved. Chain, most-specific first:
+ *   config.models[node] > config.models.default > config.agent[vendor].model
+ *   > options.model (the node's explicit per-call pick, e.g. triage's cheap tier)
+ * Pure function so the contract is unit-tested — the o4-mini incident was this
+ * chain resolving to null and the strategy silently substituting its vendor
+ * default underneath us.
+ */
+export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel } = {}) {
+  const modelsConfig = config.models || {};
+  const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
+  const globalModel = modelsConfig.default || null;
+  const agentModel = config.agent?.[strategyName]?.model || null;
+  // The RUN's model — `MODEL` env, stamped on every run container by the
+  // executor from the operator's pick. Below options.model so an explicit
+  // per-call override (triage's cheap tier) still wins; above nothing, because
+  // "nothing" is what let the strategy's hardcoded vendor default run instead
+  // of the model the operator chose.
+  const runModel = (typeof envModel === 'string' ? envModel.trim() : '') || null;
+  return nodeModel || globalModel || agentModel || options.model || runModel || null;
+}
+
 export function getAgentStrategy(context = {}) {
   const { state = {}, preferredAgent = null } = context;
   const requested = preferredAgent || state.agentType || process.env.AGENT_TYPE;
@@ -117,11 +139,12 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
   const strategy = getAgentStrategy(ctx);
 
   const config = stateView.config || options.config || {};
-  const modelsConfig = config.models || {};
-  const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
-  const globalModel = modelsConfig.default || null;
-  const agentModel = config.agent?.[strategy.name]?.model || null;
-  const model = nodeModel || globalModel || agentModel || options.model || null;
+  const model = resolveInvocationModel({
+    config,
+    options,
+    strategyName: strategy.name,
+    envModel: process.env.MODEL,
+  });
 
   const finalOptions = {
     ...options,
