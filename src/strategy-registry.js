@@ -153,6 +153,11 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     schema: options.schema || context.schema,
     images: options.images || context.images || [],
     skills: options.skills || context.skills || [],
+    // Ad-hoc per-agent remote MCP servers (row instance data — like skills, NOT
+    // a registered skill). The executor resolves the workflow row's customMcp
+    // into [{serverName, def}] and puts it on state; strategies merge it into
+    // their mcpServers map after registry skills. See plans/custom-mcp-per-agent.
+    extraMcpServers: options.extraMcpServers || stateView.extraMcpServers || context.extraMcpServers || [],
     // Native agent plugins (mirrors `skills`). Passed through to the strategy;
     // only the Codex strategy consumes it (installs into CODEX_HOME), others
     // ignore it. No prompt fragments derive from plugins.
