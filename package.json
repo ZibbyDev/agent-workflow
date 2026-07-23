@@ -54,6 +54,7 @@
     "build": "node scripts/build.mjs && tsc",
     "build:js": "node scripts/build.mjs",
     "build:types": "tsc",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "prepack": "npm run build"
   }
 }
