@@ -72,7 +72,7 @@ export function listStrategies() {
  * chain resolving to null and the strategy silently substituting its vendor
  * default underneath us.
  */
-export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel } = {}) {
+export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel }: any = {}) {
   const modelsConfig = config.models || {};
   const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
   const globalModel = modelsConfig.default || null;
@@ -86,7 +86,7 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
   return nodeModel || globalModel || agentModel || options.model || runModel || null;
 }
 
-export function getAgentStrategy(context = {}) {
+export function getAgentStrategy(context: any = {}) {
   const { state = {}, preferredAgent = null } = context;
   const requested = preferredAgent || state.agentType || process.env.AGENT_TYPE;
 
@@ -122,7 +122,7 @@ export function getAgentStrategy(context = {}) {
  * @param {object} [options]
  * @returns {Promise<string | { raw: string, structured: object }>}
  */
-export async function invokeAgent(prompt, context = {}, options = {}) {
+export async function invokeAgent(prompt, context: any = {}, options: any = {}) {
   // Normalize `state` to a plain snapshot view. A node may pass EITHER the
   // WorkflowState INSTANCE or its getAll() snapshot. The reads below
   // (agentType via getAgentStrategy, config, workspace, _currentNodeConfig) use
@@ -134,7 +134,7 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
   const stateView = context.state && typeof context.state.getAll === 'function'
     ? context.state.getAll()
     : (context.state || {});
-  const ctx = { ...context, state: stateView };
+  const ctx: any = { ...context, state: stateView };
 
   const strategy = getAgentStrategy(ctx);
 
@@ -146,7 +146,7 @@ export async function invokeAgent(prompt, context = {}, options = {}) {
     envModel: process.env.MODEL,
   });
 
-  const finalOptions = {
+  const finalOptions: any = {
     ...options,
     model,
     workspace: stateView.workspace || options.workspace,

@@ -12,8 +12,25 @@
     "strict": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": false,
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022"
+    ]
   },
-  "include": ["src/**/*.js"],
-  "exclude": ["src/**/__tests__/**", "node_modules", "dist"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js"
+  ],
+  "exclude": [
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.js",
+    "node_modules",
+    "dist"
+  ]
 }

@@ -66,6 +66,9 @@ function selfRuntimeTag() {
  * can `if (e.fallback)` without instanceof-juggling across module loads.
  */
 export class SubgraphFallback extends Error {
+  detail?: any;
+  fallback?: any;
+  reason?: any;
   constructor(reason, detail) {
     super(`in-process sub-graph fallback: ${reason}${detail ? ` (${detail})` : ''}`);
     this.fallback = true;
@@ -111,8 +114,8 @@ const envScopeALS = new AsyncLocalStorage();
 let envScopeQueue = Promise.resolve();
 
 async function withChildEnvScope(childEnv, fn) {
-  const entries = childEnv && typeof childEnv === 'object' && !Array.isArray(childEnv)
-    ? Object.entries(childEnv).filter(([k, v]) => typeof k === 'string' && k && typeof v === 'string')
+  const entries: any = childEnv && typeof childEnv === 'object' && !Array.isArray(childEnv)
+    ? Object.entries(childEnv).filter(([k, v]: any) => typeof k === 'string' && k && typeof v === 'string')
     : [];
   if (entries.length === 0) return fn(); // no env → no mutation → free parallelism
 
@@ -185,7 +188,7 @@ function readDispatchEnv() {
  * other than those we fall back (the backend may be running an older
  * version that doesn't expose the endpoint yet).
  */
-async function callBegin({ apiBase, authToken, body }) {
+async function callBegin({ apiBase, authToken, body }: any) {
   let resp;
   try {
     resp = await fetch(`${apiBase}/internal/subgraph/begin`, {
@@ -200,14 +203,14 @@ async function callBegin({ apiBase, authToken, body }) {
   try { json = await resp.json(); } catch { /* non-JSON 5xx is fine */ }
   if (!resp.ok) {
     if (resp.status === 404) {
-      const e = new Error(`Sub-graph child '${body.childWorkflowType}' not found in project`);
+      const e: any = new Error(`Sub-graph child '${body.childWorkflowType}' not found in project`);
       e.code = 'SUBGRAPH_NOT_FOUND';
       e.status = 404;
       throw e;
     }
     if (resp.status === 429) {
       const q = json?.quotaInfo || {};
-      const e = new Error(
+      const e: any = new Error(
         `Sub-graph blocked by quota (${q.used ?? '?'}/${q.limit ?? '?'} on ${q.planId || 'plan'})`,
       );
       e.code = 'SUBGRAPH_QUOTA_EXCEEDED';
@@ -216,7 +219,7 @@ async function callBegin({ apiBase, authToken, body }) {
       throw e;
     }
     if (resp.status === 400 && json?.validationErrors) {
-      const e = new Error(`Sub-graph rejected input: ${json?.error || json?.message || 'validation failed'}`);
+      const e: any = new Error(`Sub-graph rejected input: ${json?.error || json?.message || 'validation failed'}`);
       e.code = 'SUBGRAPH_INVALID_INPUT';
       e.status = 400;
       e.validationErrors = json.validationErrors;
@@ -233,7 +236,7 @@ async function callBegin({ apiBase, authToken, body }) {
 /** POST finalize. Best-effort: failure logs but does not throw — the child
  *  has already run, we don't want to mask its return value with a backend
  *  hiccup on the closeout call. */
-async function callFinalize({ apiBase, authToken, payload }) {
+async function callFinalize({ apiBase, authToken, payload }: any) {
   try {
     const resp = await fetch(`${apiBase}/internal/subgraph/finalize`, {
       method: 'POST',
@@ -284,7 +287,7 @@ async function ensureBundleExtracted(bundleUrl, cacheDir) {
   }
 
   try {
-    await new Promise((resolveProc, rejectProc) => {
+    await new Promise<void>((resolveProc, rejectProc) => {
       const curl = spawn('curl', ['-fsSL', bundleUrl], { stdio: ['ignore', 'pipe', 'inherit'] });
       const tar = spawn('tar', ['-xzf', '-', '-C', cacheDir], { stdio: ['pipe', 'inherit', 'inherit'] });
       curl.stdout.pipe(tar.stdin);
@@ -368,7 +371,7 @@ async function loadChildAgentClass(cacheDir) {
  *                             these through, do NOT fall back, because
  *                             HTTP would fail the same way.
  */
-export async function runInProcessSubgraph(workflowName, options = {}) {
+export async function runInProcessSubgraph(workflowName, options: any = {}) {
   if (!workflowName || typeof workflowName !== 'string') {
     throw new Error('runInProcessSubgraph: workflowName (string) is required');
   }
@@ -528,7 +531,7 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
   // that don't return `nodeConfigs` → key omitted, byte-identical to before.
   const hasChildNodeConfigs = nodeConfigs && typeof nodeConfigs === 'object'
     && !Array.isArray(nodeConfigs) && Object.keys(nodeConfigs).length > 0;
-  const childInitialState = {
+  const childInitialState: any = {
     ...(options.input || {}),
     ...(hasChildNodeConfigs ? { nodeConfigs } : {}),
   };
@@ -599,7 +602,7 @@ export async function runInProcessSubgraph(workflowName, options = {}) {
         durationMs: Date.now() - startedAt,
       },
     });
-    const e = new Error(`Sub-graph '${workflowName}' canceled by parent abort`);
+    const e: any = new Error(`Sub-graph '${workflowName}' canceled by parent abort`);
     e.code = 'SUBGRAPH_CANCELED';
     e.subgraphJobId = childExecutionId;
     throw e;
@@ -664,7 +667,7 @@ function dirSizeBytes(dir) {
  * on each fresh extract, so cold versions naturally rank older. Good
  * enough for warm-pool cleanup; not a replacement for a real LRU cache.
  */
-export function evictCacheIfOver({ cap = Number(process.env.ZIBBY_SUBGRAPH_CACHE_CAP_BYTES || 2 * 1024 * 1024 * 1024) } = {}) {
+export function evictCacheIfOver({ cap = Number(process.env.ZIBBY_SUBGRAPH_CACHE_CAP_BYTES || 2 * 1024 * 1024 * 1024) }: any = {}) {
   try {
     if (!existsSync(CACHE_ROOT)) return { evicted: 0, freedBytes: 0 };
     const entries = readdirSync(CACHE_ROOT);

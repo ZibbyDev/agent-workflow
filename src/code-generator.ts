@@ -1,7 +1,7 @@
 import { NODE_DEFAULT_TOOLS } from './tool-resolver.js';
 import { getNodeTemplate } from './node-registry.js';
 
-export function generateWorkflowCode(config, meta = {}) {
+export function generateWorkflowCode(config, meta: any = {}) {
   const { nodes, edges, nodeConfigs = {} } = config;
 
   const decisionNodeIds = new Set();
@@ -41,8 +41,8 @@ export function generateWorkflowCode(config, meta = {}) {
 }
 
 export function generateNodeConfigsJson(nodeConfigs) {
-  const cleaned = {};
-  for (const [nodeId, config] of Object.entries(nodeConfigs)) {
+  const cleaned: any = {};
+  for (const [nodeId, config] of (Object.entries(nodeConfigs) as [string, any][])) {
     const { tools: _tools, ...rest } = config;
     if (Object.keys(rest).length > 0) cleaned[nodeId] = rest;
   }
@@ -59,7 +59,7 @@ function generateHeader(meta) {
   ].join('\n');
 }
 
-function generateImports(workflowType, { usesRegisteredNodes = true } = {}) {
+function generateImports(workflowType, { usesRegisteredNodes = true }: any = {}) {
   const lines = [
     `import { WorkflowGraph, invokeAgent, getResolvedToolDefinitions } from '@zibby/agent-workflow';`,
   ];

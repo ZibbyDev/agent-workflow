@@ -40,7 +40,7 @@ const _als = new AsyncLocalStorage();
  *   dispatchMode: 'cold'|'warm'|'inprocess'|null,
  * }}
  */
-export function getExecContext() {
+export function getExecContext(): any {
   const store = _als.getStore();
   if (store) return store;
   // Legacy fallback — top-level cloud runs that haven't been wrapped
@@ -72,7 +72,7 @@ export function getExecContext() {
  * @returns {Promise<T> | T}
  */
 export function runInContext(ctx, fn) {
-  const parent = _als.getStore() || getExecContext();
+  const parent: any = _als.getStore() || getExecContext();
   const next = Object.freeze({
     executionId: ctx.executionId,
     parentExecutionId: ctx.parentExecutionId ?? parent.executionId ?? null,

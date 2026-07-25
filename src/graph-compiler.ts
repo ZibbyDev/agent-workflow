@@ -3,7 +3,7 @@ import { getNodeImpl, hasNode } from './node-registry.js';
 import { resolveNodeTools } from './tool-resolver.js';
 import { logger } from './logger.js';
 
-export function compileGraph(config, options = {}) {
+export function compileGraph(config, options: any = {}) {
   const { nodes, edges, nodeConfigs = {} } = config;
 
   if (!Array.isArray(nodes) || nodes.length === 0) {
@@ -18,7 +18,7 @@ export function compileGraph(config, options = {}) {
 
   const decisionNodeIds = new Set();
   const nodeMap = new Map();
-  const resolvedToolsMap = {};
+  const resolvedToolsMap: any = {};
 
   for (const node of nodes) {
     const nodeType = resolveNodeType(node);
@@ -34,7 +34,7 @@ export function compileGraph(config, options = {}) {
     const resolved = resolveNodeTools(nodeType, nodeConfig.tools);
     if (resolved) resolvedToolsMap[nodeId] = resolved;
 
-    const nodeOptions = {};
+    const nodeOptions: any = {};
     if (nodeConfig.prompt) nodeOptions.prompt = nodeConfig.prompt;
 
     const isRegistered = hasNode(nodeType);
@@ -209,7 +209,7 @@ function compileConditionalRoutes(decisionId, outgoingEdges, decisionNodeIds) {
   return routeFn;
 }
 
-function wrapCustomCode(nodeId, codeString, nodeConfig = {}) {
+function wrapCustomCode(nodeId, codeString, nodeConfig: any = {}) {
   let executeFn;
   try {
     executeFn = new Function('invokeAgent', 'require', 'console', `return (${codeString})`);
@@ -220,7 +220,7 @@ function wrapCustomCode(nodeId, codeString, nodeConfig = {}) {
   const boundExecute = executeFn(
     async (...args) => {
       const { invokeAgent } = await import('./strategy-registry.js');
-      return invokeAgent(...args);
+      return (invokeAgent as any)(...args);
     },
     typeof require !== 'undefined' ? require : undefined,
     console

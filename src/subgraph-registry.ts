@@ -54,7 +54,7 @@ export function has(name) {
  *   sub-graph invocation gets its own graph so state is not shared.
  * @param {object} [meta] — bookkeeping written for diagnostics
  */
-export function register(name, factory, meta = {}) {
+export function register(name, factory, meta: any = {}) {
   if (!name || typeof name !== 'string') {
     throw new Error('subgraph-registry.register: name required');
   }

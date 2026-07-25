@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 export class ContextLoader {
-  static async loadContext(specPath, cwd, config = {}) {
-    const context = {};
+  static async loadContext(specPath, cwd, config: any = {}) {
+    const context: any = {};
     const filenames = config.filenames || ['CONTEXT.md', 'AGENTS.md'];
 
     if (specPath) {
@@ -17,8 +17,8 @@ export class ContextLoader {
       }
     }
 
-    const discovery = config.discovery || {};
-    for (const [key, pathTemplate] of Object.entries(discovery)) {
+    const discovery: any = config.discovery || {};
+    for (const [key, pathTemplate] of (Object.entries(discovery) as [string, any][])) {
       try {
         const resolvedPath = join(cwd, pathTemplate);
         if (existsSync(resolvedPath)) {

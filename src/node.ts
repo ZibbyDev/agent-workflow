@@ -20,6 +20,16 @@ if (!Handlebars.helpers.json) Handlebars.registerHelper('json', (v) => JSON.stri
 if (!Handlebars.helpers.eq) Handlebars.registerHelper('eq', (a, b) => a === b);
 
 export class Node {
+  _compiledPrompt?: any;
+  config?: any;
+  customExecute?: any;
+  isZodSchema?: any;
+  name?: any;
+  onComplete?: any;
+  outputSchema?: any;
+  parser?: any;
+  prompt?: any;
+  retries?: any;
   constructor(config) {
     this.config = config;
     this.name = config.name;
@@ -143,10 +153,10 @@ export class Node {
         const perNodeAgentMap = zibbyConfig.agents || {};
         const preferredAgent =
           this.config.agent ?? perNodeAgentMap[this.name] ?? null;
-        const agentContext = { state: getAllState() };
+        const agentContext: any = { state: getAllState() };
         if (preferredAgent) agentContext.preferredAgent = preferredAgent;
 
-        const agentOptions = {
+        const agentOptions: any = {
           workspace: cwd,
           schema: this.isZodSchema ? this.outputSchema : null,
           skills: this.config.skills || [],

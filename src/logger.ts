@@ -12,14 +12,14 @@
 
 const _noop = () => {};
 
-const _default = {
+const _default: any = {
   debug: _noop,
   info: _noop,
   warn: (...args) => console.warn('[workflow]', ...args),
   error: (...args) => console.error('[workflow]', ...args),
 };
 
-const _state = { impl: _default };
+const _state: any = { impl: _default };
 
 /**
  * Replace the framework logger.
@@ -29,7 +29,7 @@ export function setLogger(impl) {
   _state.impl = { ..._default, ...impl };
 }
 
-export const logger = {
+export const logger: any = {
   debug: (...args) => _state.impl.debug?.(...args),
   info:  (...args) => _state.impl.info?.(...args),
   warn:  (...args) => _state.impl.warn?.(...args),

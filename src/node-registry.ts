@@ -44,7 +44,7 @@ export function getNodeTemplate(type) {
 registerNode('ai_agent', {
   name: 'ai_agent',
   factory: true,
-  create: (nodeId, nodeConfig = {}) => ({
+  create: (nodeId, nodeConfig: any = {}) => ({
     name: nodeId,
     _isCustomCode: true,
     execute: async (state) => {
@@ -74,7 +74,7 @@ registerNode('ai_agent', {
 
 function buildAIAgentPrompt(basePrompt, state) {
   const refRegex = /@([\w.]+)/g;
-  const refs = new Set();
+  const refs = new Set<string>();
   let match;
   while ((match = refRegex.exec(basePrompt)) !== null) refs.add(match[1]);
 

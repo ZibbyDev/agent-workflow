@@ -1,7 +1,7 @@
 import { getSkill } from './skill-registry.js';
 import { logger } from './logger.js';
 
-const NODE_DEFAULT_TOOLS = {};
+const NODE_DEFAULT_TOOLS: any = {};
 
 export function resolveNodeTools(nodeType, userToolIds) {
   if (Array.isArray(userToolIds)) {
@@ -16,7 +16,7 @@ export function getResolvedToolDefinitions(toolIds) {
   if (!Array.isArray(toolIds) || toolIds.length === 0) return null;
 
   const claudeTools = [];
-  const mcpServers = {};
+  const mcpServers: any = {};
   const validIds = [];
 
   for (const toolId of toolIds) {
@@ -43,7 +43,7 @@ export function getResolvedToolDefinitions(toolIds) {
           mcpServers[skill.serverName] = { ...resolved, toolPrefix: toolId };
         }
       } else {
-        const env = {};
+        const env: any = {};
         for (const key of (skill.envKeys || [])) {
           const value = process.env[key];
           if (value) env[key] = value;

@@ -92,6 +92,12 @@ function makeWrapWriter(orig, state) {
 }
 
 class Timeline {
+  _currentNode?: any;
+  _emitWorkflowGraphMarkers?: any;
+  _errState?: any;
+  _origStderrWrite?: any;
+  _origStdoutWrite?: any;
+  _outState?: any;
   constructor() {
     this._currentNode = null;
     this._origStdoutWrite = null;
@@ -112,13 +118,13 @@ class Timeline {
     this._origStdoutWrite = process.stdout.write.bind(process.stdout);
     this._origStderrWrite = process.stderr.write.bind(process.stderr);
 
-    const outState = { lineStart: true, col: 0, inEsc: false };
-    const errState = { lineStart: true, col: 0, inEsc: false };
+    const outState: any = { lineStart: true, col: 0, inEsc: false };
+    const errState: any = { lineStart: true, col: 0, inEsc: false };
     this._outState = outState;
     this._errState = errState;
 
-    process.stdout.write = makeWrapWriter(this._origStdoutWrite, outState);
-    process.stderr.write = makeWrapWriter(this._origStderrWrite, errState);
+    process.stdout.write = makeWrapWriter(this._origStdoutWrite, outState) as any;
+    process.stderr.write = makeWrapWriter(this._origStderrWrite, errState) as any;
   }
 
   _stopIntercepting() {
@@ -224,7 +230,7 @@ class Timeline {
     this._startIntercepting();
   }
 
-  nodeComplete(name, opts = {}) {
+  nodeComplete(name, opts: any = {}) {
     this._stopIntercepting();
     const { duration, details } = opts;
     if (details) {
@@ -238,7 +244,7 @@ class Timeline {
     this._rawWrite('');
   }
 
-  nodeFailed(name, error, opts = {}) {
+  nodeFailed(name, error, opts: any = {}) {
     this._stopIntercepting();
     const { duration } = opts;
     const durationStr = duration ? chalk.dim(` ${formatDuration(duration)}`) : '';

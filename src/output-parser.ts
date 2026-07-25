@@ -4,6 +4,7 @@
  */
 
 export class OutputParser {
+  schema?: any;
   constructor(schema) {
     this.schema = schema;
   }
@@ -44,7 +45,7 @@ export class OutputParser {
   validate(data) {
     const errors = [];
 
-    for (const [key, validator] of Object.entries(this.schema)) {
+    for (const [key, validator] of (Object.entries(this.schema) as [string, any][])) {
       if (validator.required && !(key in data)) {
         errors.push(`Missing required field: ${key}`);
       }
@@ -68,7 +69,7 @@ export class OutputParser {
   }
 }
 
-export const SchemaTypes = {
+export const SchemaTypes: any = {
   string:  (required = true) => ({ type: 'string', required }),
   number:  (required = true) => ({ type: 'number', required }),
   boolean: (required = true) => ({ type: 'boolean', required }),

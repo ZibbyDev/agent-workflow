@@ -23,7 +23,8 @@ async function collectSourceFiles(dir) {
       entries.push(...(await collectSourceFiles(full)));
     } else if (
       item.isFile() &&
-      extname(item.name) === '.js' &&
+      (extname(item.name) === '.ts' || extname(item.name) === '.js') &&
+      !item.name.endsWith('.d.ts') &&
       !item.name.includes('.test.') &&
       !item.name.includes('.spec.')
     ) {
@@ -49,8 +50,12 @@ await build({
   format: 'esm',
   platform: 'node',
   target: 'node18',
+  // esbuild reads the project tsconfig.json (useDefineForClassFields:false) per
+  // input, so a bare `x?: any;` class-field declaration the TS migration added
+  // emits ZERO runtime code (no `this.x = void 0`) — dist/*.js stays behaviorally
+  // identical to the pre-migration JS.
   bundle: true,
-  minify: true,
+  minify: !process.env.NO_MINIFY,
   sourcemap: false,
   logLevel: 'warning',
   external: [

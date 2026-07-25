@@ -40,7 +40,7 @@ function logWorkflowSessionResolution({
   sessionPath,
   idSource,
   mkdirFresh,
-}) {
+}: any) {
   // Default-OFF. The session-resolution line is diagnostic (`[zibby:session]
   // from=WorkflowGraph.run pid=7 ppid=1 sessionId=... source=generated
   // mkdir=yes path=...`) and clutters production cloud logs without
@@ -61,7 +61,7 @@ function logWorkflowSessionResolution({
     process.env.ZIBBY_TRACE_SESSION === '1' ||
     process.env.ZIBBY_TRACE_SESSION === 'true';
   if (deep) {
-    const err = new Error('session trace');
+    const err: any = new Error('session trace');
     const frames = (err.stack || '').split('\n').slice(2, 14).join('\n');
     console.log(`[zibby:session] stack (${traceFrom}):\n${frames}`);
   }
@@ -117,7 +117,7 @@ export function clearInheritedSessionEnvForFreshRun() {
  * Cursor agent and MCP subprocesses inherit `process.env`. Keep it aligned with the
  * resolved workflow session so Playwright does not mkdir under a ghost path.
  */
-export function syncProcessEnvToSession({ sessionPath, sessionId }) {
+export function syncProcessEnvToSession({ sessionPath, sessionId }: any) {
   if (sessionPath && typeof sessionPath === 'string') {
     process.env.ZIBBY_SESSION_PATH = sessionPath;
   }
@@ -130,7 +130,7 @@ export function syncProcessEnvToSession({ sessionPath, sessionId }) {
  * New session folder id (timestamp + random suffix). Shared by WorkflowGraph and runTest pre-allocation.
  * @param {object} [config]
  */
-export function generateWorkflowSessionId(config = {}) {
+export function generateWorkflowSessionId(config: any = {}) {
   const ciSessionId = CI_ENV_VARS.map((envVar) => process.env[envVar]).find(Boolean);
   const rand = Math.random().toString(36).slice(2, 6);
   const baseId = ciSessionId || `${Date.now()}_${rand}`;
@@ -147,7 +147,7 @@ export function resolveWorkflowSession({
   config = {},
   initialState = {},
   traceFrom = 'resolveWorkflowSession',
-} = {}) {
+}: any = {}) {
   let sessionPath = initialState.sessionPath;
   let sessionTimestamp = initialState.sessionTimestamp;
   let idSource = 'initialState.sessionPath';
@@ -217,7 +217,21 @@ export function resolveWorkflowSession({
 // ── WorkflowGraph ──────────────────────────────────────────────────────────
 
 export class WorkflowGraph {
-  constructor(options = {}) {
+  _compiledPrompts?: any;
+  _invokeAgent?: any;
+  conditionalCodeMap?: any;
+  contextSchema?: any;
+  edges?: any;
+  entryPoint?: any;
+  inputSchema?: any;
+  middleware?: any;
+  nodeOptions?: any;
+  nodePrompts?: any;
+  nodeTypeMap?: any;
+  nodes?: any;
+  resolvedToolsMap?: any;
+  stateSchema?: any;
+  constructor(options: any = {}) {
     this.nodes = new Map();
     this.edges = new Map();
     this.entryPoint = null;
@@ -294,7 +308,7 @@ export class WorkflowGraph {
     return this.stateSchema;
   }
 
-  addNode(name, nodeOrConfig, options = {}) {
+  addNode(name, nodeOrConfig, options: any = {}) {
     // Sub-graph short-circuit. If the node config declares another
     // workflow as its body (`{ workflow: 'other-name' }`), wrap it as a
     // custom-execute node that POSTs to the trigger endpoint and (for
@@ -316,7 +330,7 @@ export class WorkflowGraph {
     // unique (projectId, workflowType), so the name is unambiguous.
     if (!(nodeOrConfig instanceof Node) && nodeOrConfig && typeof nodeOrConfig === 'object' && typeof nodeOrConfig.workflow === 'string') {
       const subgraphCfg = nodeOrConfig;
-      const wrapped = {
+      const wrapped: any = {
         name,
         // Sub-graphs are custom-code by definition — there's no LLM call
         // and no outputSchema to validate; the child's final state IS
@@ -428,7 +442,7 @@ export class WorkflowGraph {
     return this;
   }
 
-  addConditionalEdges(from, routes, { labels } = {}) {
+  addConditionalEdges(from, routes, { labels }: any = {}) {
     this.edges.set(from, { conditional: true, routes, labels });
     if (typeof routes === 'function') this.conditionalCodeMap.set(from, routes.toString());
     return this;
@@ -456,7 +470,7 @@ export class WorkflowGraph {
 
   serialize() {
     const nodes = [];
-    const nodeConfigs = {};
+    const nodeConfigs: any = {};
 
     for (const [nodeId, node] of this.nodes) {
       // Display type. Single source of truth is the node's SHAPE: a pure
@@ -469,7 +483,7 @@ export class WorkflowGraph {
         || (node?.config?._isRouter === true ? 'decision' : nodeId);
       nodes.push({ id: nodeId, type: nodeType, data: { nodeType, label: nodeId } });
 
-      const config = {};
+      const config: any = {};
       if (node._isCustomCode && typeof node.execute === 'function') {
         config.customCode = node.execute.toString();
       }
@@ -601,8 +615,8 @@ export class WorkflowGraph {
         edges.push({ source: from, target });
       } else if (target.conditional) {
         const codeStr = this.conditionalCodeMap.get(from) || target.routes.toString();
-        const possibleTargets = this._inferConditionalTargets(target.routes, target.labels);
-        const labels = target.labels || {};
+        const possibleTargets: any[] = this._inferConditionalTargets(target.routes, target.labels);
+        const labels: any = target.labels || {};
 
         // Which node do the labeled conditional edges fan out FROM in the
         // serialized view?
@@ -628,7 +642,7 @@ export class WorkflowGraph {
           source = branchId;
         }
         for (const t of possibleTargets) {
-          const edge = { source, target: t, data: { conditionalCode: codeStr } };
+          const edge: any = { source, target: t, data: { conditionalCode: codeStr } };
           if (labels[t]) edge.label = labels[t];
           edges.push(edge);
         }
@@ -729,10 +743,10 @@ export class WorkflowGraph {
   // ready nodes; a cycle stall is broken at the lowest declared index. Always
   // returns every node exactly once (nothing dropped, nothing duplicated).
   _topoOrderNodes(nodes, edges) {
-    const declared = new Map(nodes.map((n, i) => [n.id, i]));
+    const declared = new Map<any, any>(nodes.map((n, i) => [n.id, i]));
     const byId     = new Map(nodes.map((n) => [n.id, n]));
-    const indeg    = new Map(nodes.map((n) => [n.id, 0]));
-    const out      = new Map(nodes.map((n) => [n.id, []]));
+    const indeg    = new Map<any, any>(nodes.map((n) => [n.id, 0]));
+    const out      = new Map<any, any>(nodes.map((n) => [n.id, []]));
     for (const e of edges) {
       if (out.has(e.source) && indeg.has(e.target)) {
         out.get(e.source).push(e.target);
@@ -786,7 +800,7 @@ export class WorkflowGraph {
     // All quoted string literals: '…', "…", or `…` (template literals only when
     // they contain no ${…} interpolation — an interpolated target isn't a static
     // literal we can resolve anyway).
-    const literals = new Set();
+    const literals = new Set<string>();
     const literalPattern = /(['"])((?:\\.|(?!\1).)*?)\1|`((?:\\.|[^`$]|\$(?!\{))*?)`/g;
     let m;
     while ((m = literalPattern.exec(fnStr)) !== null) {
@@ -829,13 +843,13 @@ export class WorkflowGraph {
     return this._flattenSchema(root, prefix);
   }
 
-  _flattenSchema(schema, prefix = '') {
+  _flattenSchema(schema: any, prefix = '') {
     if (!schema || typeof schema !== 'object') return [];
     const variables = [];
-    const properties = schema.properties || {};
+    const properties: any = schema.properties || {};
     const required = schema.required || [];
 
-    for (const [key, propSchema] of Object.entries(properties)) {
+    for (const [key, propSchema] of (Object.entries(properties) as [string, any][])) {
       const path = prefix ? `${prefix}.${key}` : key;
       variables.push({
         path,
@@ -897,7 +911,7 @@ export class WorkflowGraph {
    *                                             AbortSignal entirely. Set higher if you have legitimately long-running
    *                                             cleanup paths inside a strategy's abort handler.
    */
-  async run(agent, initialState = {}, options = {}) {
+  async run(agent, initialState: any = {}, options: any = {}) {
     if (!this.entryPoint) throw new Error('No entry point set for graph');
 
     // ── Abort plumbing ──────────────────────────────────────────────────
@@ -1048,8 +1062,8 @@ export class WorkflowGraph {
     const userSkillsMap = (config.skills && typeof config.skills === 'object')
       ? config.skills
       : {};
-    const userSkillsList = Object.values(userSkillsMap).filter(
-      (s) => s && typeof s === 'object' && typeof s.id === 'string',
+    const userSkillsList: any[] = Object.values(userSkillsMap).filter(
+      (s: any) => s && typeof s === 'object' && typeof s.id === 'string',
     );
     const resolveSkill = (id) => {
       for (const s of userSkillsList) {
@@ -1180,7 +1194,7 @@ export class WorkflowGraph {
       //   skill defaults  <  later skills override  <  node-explicit opts
       //                                              <  engine (signal)
       // A skill returning null/undefined contributes nothing.
-      let skillInvokeOpts = {};
+      let skillInvokeOpts: any = {};
       const nodeSkillIds = node.config?.skills || [];
       for (const id of nodeSkillIds) {
         const skill = resolveSkill(id);
@@ -1207,7 +1221,7 @@ export class WorkflowGraph {
       // nodeContext (used by the default Node class). Without this, the
       // default code path bypasses the deadman entirely and a strategy
       // that ignores AbortSignal hangs graph.run forever.
-      const boundInvokeAgent = async (prompt, ctx, opts = {}) => {
+      const boundInvokeAgent = async (prompt, ctx, opts: any = {}) => {
         // Always inject the engine's internal signal into the strategy
         // options. Node.execute doesn't pass signal itself, so without
         // this slice-3 strategies wouldn't see the engine's abort
@@ -1236,7 +1250,7 @@ export class WorkflowGraph {
               // we're waiting on a hanging strategy promise that never
               // schedules anything.
               setTimeout(() => {
-                const err = new Error(
+                const err: any = new Error(
                   `Strategy ignored AbortSignal — engine deadman fired after ${strategyAbortTimeoutMs}ms`,
                 );
                 err.name = 'AbortError';
@@ -1254,7 +1268,7 @@ export class WorkflowGraph {
 
       // Wrap invokeAgent so node code calls `invokeAgent(promptValues)` and we
       // render the node's prompt template (Handlebars) with those values.
-      const invokeAgent = async (promptValues = {}, options = {}) => {
+      const invokeAgent = async (promptValues: any = {}, options: any = {}) => {
         let finalPrompt = options.prompt || '';
 
         if (promptTemplate) {
@@ -1311,7 +1325,7 @@ export class WorkflowGraph {
         }
       }
 
-      const nodeContext = {
+      const nodeContext: any = {
         ..._stateAll,
         state,
         invokeAgent,
@@ -1400,7 +1414,7 @@ export class WorkflowGraph {
     }
 
     timeline.graphComplete();
-    const result = { success: true, state: state.getAll(), executionLog };
+    const result: any = { success: true, state: state.getAll(), executionLog };
     if (agent && typeof agent.onComplete === 'function') {
       await agent.onComplete(result);
     }

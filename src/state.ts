@@ -12,7 +12,9 @@ function assertSafeKey(key) {
 }
 
 export class WorkflowState {
-  constructor(initialState = {}) {
+  _history?: any;
+  _state?: any;
+  constructor(initialState: any = {}) {
     this._state = Object.create(null);
     Object.assign(this._state, {
       messages: [],

@@ -5,6 +5,9 @@
  * @abstract
  */
 export class AgentStrategy {
+  description?: any;
+  name?: any;
+  priority?: any;
   /**
    * @param {string} name        - Provider identifier (e.g. 'claude', 'openai')
    * @param {string} description - Human-readable description
@@ -41,7 +44,7 @@ export class AgentStrategy {
    * @property {string} raw        - Raw agent output
    * @property {object} structured - Parsed and validated output
    */
-  async invoke(_prompt, _options = {}) {
+  async invoke(_prompt, _options: any = {}) {
     throw new Error(`${this.constructor.name}.invoke() must be implemented`);
   }
 

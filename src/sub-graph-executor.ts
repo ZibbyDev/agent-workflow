@@ -133,7 +133,7 @@ function resolveOutput(finalState, output) {
  *   - Sub-graph reached a non-success terminal status (failed/canceled/timeout)
  *   - Sync timeout exceeded
  */
-export async function dispatchSubgraph(workflowName, options = {}) {
+export async function dispatchSubgraph(workflowName, options: any = {}) {
   if (!workflowName || typeof workflowName !== 'string') {
     throw new Error('dispatchSubgraph: workflowName (string) is required');
   }
@@ -207,7 +207,7 @@ export async function dispatchSubgraph(workflowName, options = {}) {
   const parentExecutionId = getParentExecutionId();
 
   const triggerUrl = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/trigger`;
-  const body = {
+  const body: any = {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(options.conversationId ? { conversationId: options.conversationId } : {}),
@@ -241,7 +241,7 @@ export async function dispatchSubgraph(workflowName, options = {}) {
     // quotaInfo block when the account is over its limit.
     if (triggerResp.status === 429) {
       const q = errJson?.quotaInfo || {};
-      const e = new Error(
+      const e: any = new Error(
         `Sub-graph '${workflowName}' blocked by execution quota `
         + `(${q.used ?? '?'}/${q.limit ?? '?'} on plan ${q.planId || 'unknown'}). `
         + `Sub-workflow runs count toward the same monthly cap as user-triggered runs.`,
@@ -258,7 +258,7 @@ export async function dispatchSubgraph(workflowName, options = {}) {
     // trigger caller supplies — runner-injected contextSchema fields
     // like workspace/tokens are NOT the parent's responsibility).
     if (triggerResp.status === 400) {
-      const e = new Error(
+      const e: any = new Error(
         `Sub-graph '${workflowName}' rejected input: ${detail}`,
       );
       e.code = 'SUBGRAPH_INVALID_INPUT';
@@ -269,14 +269,14 @@ export async function dispatchSubgraph(workflowName, options = {}) {
       throw e;
     }
 
-    const e = new Error(`Sub-graph '${workflowName}' trigger rejected (${triggerResp.status}): ${detail}`);
+    const e: any = new Error(`Sub-graph '${workflowName}' trigger rejected (${triggerResp.status}): ${detail}`);
     e.code = 'SUBGRAPH_TRIGGER_FAILED';
     e.status = triggerResp.status;
     e.subgraph = workflowName;
     throw e;
   }
 
-  const triggerJson = await triggerResp.json();
+  const triggerJson: any = await triggerResp.json();
   const jobId = triggerJson?.data?.jobId || triggerJson?.jobId;
 
   if (!jobId) {
@@ -311,13 +311,13 @@ export async function dispatchSubgraph(workflowName, options = {}) {
       }
       throw new Error(`Sub-graph status poll failed for ${jobId}: ${statusResp.status}`);
     }
-    const statusJson = await statusResp.json();
+    const statusJson: any = await statusResp.json();
     const exec = statusJson?.data || statusJson?.execution || statusJson;
     lastStatus = exec?.status || lastStatus;
 
     if (TERMINAL_STATUSES.has(lastStatus)) {
       if (lastStatus !== 'completed') {
-        const err = new Error(`Sub-graph '${workflowName}' (${jobId}) ended in status '${lastStatus}'`);
+        const err: any = new Error(`Sub-graph '${workflowName}' (${jobId}) ended in status '${lastStatus}'`);
         err.subgraphJobId = jobId;
         err.subgraphStatus = lastStatus;
         throw err;
@@ -332,7 +332,7 @@ export async function dispatchSubgraph(workflowName, options = {}) {
   // Timed out without reaching terminal — cancel the child? For v1 we
   // just throw so the parent's error path runs; manual cleanup via the
   // activity tab. Orphan-reaper Lambda (future) handles long-term cleanup.
-  const e = new Error(`Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`);
+  const e: any = new Error(`Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`);
   e.subgraphJobId = jobId;
   e.subgraphStatus = lastStatus;
   throw e;

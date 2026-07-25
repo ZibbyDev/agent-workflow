@@ -65,7 +65,7 @@ const _sources = globalThis[SOURCES_KEY];
  *                                          across sources. First-party / intentional only.
  * @throws if a DIFFERENT source tries to overwrite an already-registered id (collision).
  */
-export function registerSkill(skill, opts = {}) {
+export function registerSkill(skill, opts: any = {}) {
   if (!skill || typeof skill.id !== 'string') {
     throw new Error('Skill definition must include a string id');
   }

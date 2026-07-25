@@ -1,6 +1,6 @@
 {
   "name": "@zibby/agent-workflow",
-  "version": "0.4.40",
+  "version": "0.6.0",
   "description": "Graph-based AI agent workflow orchestration. Bring your own agent strategies.",
   "type": "module",
   "main": "dist/index.js",
@@ -48,7 +48,8 @@
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@types/node": "^20.14.0"
   },
   "scripts": {
     "build": "node scripts/build.mjs && tsc",
