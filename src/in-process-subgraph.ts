@@ -416,16 +416,12 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
   // 2. Runtime compatibility check.
   const mine = selfRuntimeTag();
   if (runtimeTag && runtimeTag !== mine) {
-    // Roll back the child EXEC row by finalizing with status='canceled'
-    // so the activity tree doesn't carry a permanently-running orphan.
+    // DISCARD the just-minted child row (nothing ran in-process) so the activity
+    // tree shows ONLY the real HTTP run, not a dead 'canceled' sibling next to it.
     await callFinalize({
       apiBase: env.apiBase,
       authToken: env.authToken,
-      payload: {
-        childExecutionId,
-        status: 'canceled',
-        error: { message: `runtimeTag mismatch: parent=${mine} child=${runtimeTag}`, code: 'RUNTIME_MISMATCH' },
-      },
+      payload: { childExecutionId, discard: true },
     });
     throw new SubgraphFallback('runtime-mismatch', `${mine} vs ${runtimeTag}`);
   }
@@ -436,14 +432,13 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     // duplicates the cold-start runner's logic and is risky in v1. Let
     // HTTP handle it — the parent's wall-clock cost is the same as one
     // pre-in-process trigger, and the child still runs successfully.
+    // DISCARD the just-minted child row (nothing ran in-process — self-host
+    // children are source-only, so this is the COMMON path) so only the real
+    // HTTP run shows in the activity tree, not a spurious 'canceled' sibling.
     await callFinalize({
       apiBase: env.apiBase,
       authToken: env.authToken,
-      payload: {
-        childExecutionId,
-        status: 'canceled',
-        error: { message: 'bundle not ready for in-process; falling back to HTTP', code: 'NO_BUNDLE' },
-      },
+      payload: { childExecutionId, discard: true },
     });
     throw new SubgraphFallback('no-bundle', 'workflow bundle not built yet');
   }
