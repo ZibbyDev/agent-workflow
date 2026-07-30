@@ -44,13 +44,18 @@ export function getExecContext(): any {
   const store = _als.getStore();
   if (store) return store;
   // Legacy fallback — top-level cloud runs that haven't been wrapped
-  // yet. Env vars are set by workflow-executor.js.
+  // yet. Env vars are set by workflow-executor.js. `agent`/`signal` have
+  // no env equivalent (they're live objects), so they're null here — a
+  // hand-rolled dispatchSubgraph outside any node scope keeps its prior
+  // behavior (caller must pass them, or the in-process path runs agent-less).
   return Object.freeze({
     executionId: process.env.EXECUTION_ID || null,
     parentExecutionId: process.env.PARENT_EXECUTION_ID || null,
     depth: 0,
     conversationId: process.env.ZIBBY_CONVERSATION_ID || null,
     dispatchMode: process.env.DISPATCH_MODE || null,
+    agent: null,
+    signal: null,
   });
 }
 
@@ -79,6 +84,32 @@ export function runInContext(ctx, fn) {
     depth: (parent.depth || 0) + (ctx.executionId !== parent.executionId ? 1 : 0),
     conversationId: ctx.conversationId !== undefined ? ctx.conversationId : (parent.conversationId ?? null),
     dispatchMode: ctx.dispatchMode ?? null,
+    // agent/signal are the live run objects; inherit the parent's unless the
+    // caller overrides — so a child scope keeps seeing an agent/signal for its
+    // own dispatchSubgraph calls (see withAgentContext).
+    agent: ctx.agent !== undefined ? ctx.agent : (parent.agent ?? null),
+    signal: ctx.signal !== undefined ? ctx.signal : (parent.signal ?? null),
+  });
+  return _als.run(next, fn);
+}
+
+/**
+ * Add the currently-running graph's `agent` shell + abort `signal` to the
+ * active context WITHOUT touching executionId / parentExecutionId / depth.
+ *
+ * The engine wraps each node's execute() in this so a node that hand-rolls
+ * `dispatchSubgraph(slug, { input })` — the documented fan-out pattern — gets
+ * the parent agent + cancel signal AUTOMATICALLY, exactly like the built-in
+ * sub-workflow node form already does. Without it, a hand-rolled dispatch ran
+ * the in-process child with no agent (LLM nodes fail) or fell back to HTTP.
+ * Explicitly-passed `parentAgent`/`signal` still win — this only fills the gap.
+ */
+export function withAgentContext(agent, signal, fn) {
+  const parent: any = _als.getStore() || getExecContext();
+  const next = Object.freeze({
+    ...parent,
+    agent: agent ?? parent.agent ?? null,
+    signal: signal ?? parent.signal ?? null,
   });
   return _als.run(next, fn);
 }
@@ -101,6 +132,8 @@ export function withRootContext(ctx, fn) {
       depth: 0,
       conversationId: ctx.conversationId ?? null,
       dispatchMode: ctx.dispatchMode ?? 'cold',
+      agent: ctx.agent ?? null,
+      signal: ctx.signal ?? null,
     }),
     fn,
   );

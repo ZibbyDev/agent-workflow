@@ -190,11 +190,12 @@ describe('runInProcessSubgraph — runtime mismatch', () => {
       fallback: true,
       reason: 'runtime-mismatch',
     });
-    // finalize was called with status=canceled
+    // finalize DISCARDS the just-minted child row (3821e9a — nothing ran
+    // in-process on a runtime mismatch, so drop it rather than leave a dead
+    // 'canceled' sibling in the activity tree).
     const finalizeCall = calls.find((c) => c.url.endsWith('/finalize'));
     expect(finalizeCall).toBeDefined();
-    expect(finalizeCall.body.status).toBe('canceled');
-    expect(finalizeCall.body.error.code).toBe('RUNTIME_MISMATCH');
+    expect(finalizeCall.body.discard).toBe(true);
   });
 });
 

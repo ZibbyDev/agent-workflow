@@ -12,7 +12,7 @@
  *   - Top-level `withRootContext` is depth=0 even if env has noise.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getExecContext, runInContext, withRootContext } from '../exec-context.js';
+import { getExecContext, runInContext, withRootContext, withAgentContext } from '../exec-context.js';
 
 const ORIG = {};
 const ENV_KEYS = ['EXECUTION_ID', 'PARENT_EXECUTION_ID', 'ZIBBY_CONVERSATION_ID', 'DISPATCH_MODE'];
@@ -50,6 +50,52 @@ describe('exec-context — env fallback', () => {
     expect(ctx.parentExecutionId).toBe('env-parent-1');
     expect(ctx.conversationId).toBe('env-conv-1');
     expect(ctx.dispatchMode).toBe('cold');
+  });
+});
+
+describe('exec-context — agent/signal (withAgentContext)', () => {
+  it('getExecContext exposes null agent/signal with no scope', () => {
+    const ctx = getExecContext();
+    expect(ctx.agent).toBe(null);
+    expect(ctx.signal).toBe(null);
+  });
+
+  it('withAgentContext publishes agent + signal without bumping depth or changing ids', async () => {
+    const agent = { id: 'parent-agent' };
+    const signal = new AbortController().signal;
+    await runInContext({ executionId: 'exec-1' }, async () => {
+      expect(getExecContext().depth).toBe(1);
+      await withAgentContext(agent, signal, async () => {
+        const ctx = getExecContext();
+        expect(ctx.agent).toBe(agent);
+        expect(ctx.signal).toBe(signal);
+        // identity/lineage preserved — only agent/signal were added.
+        expect(ctx.executionId).toBe('exec-1');
+        expect(ctx.depth).toBe(1);
+      });
+    });
+  });
+
+  it('a nested runInContext child INHERITS the parent agent/signal', async () => {
+    const agent = { id: 'a' };
+    const signal = new AbortController().signal;
+    await withAgentContext(agent, signal, async () => {
+      // e.g. an in-process child scope minted mid-run
+      await runInContext({ executionId: 'child' }, async () => {
+        const ctx = getExecContext();
+        expect(ctx.agent).toBe(agent);
+        expect(ctx.signal).toBe(signal);
+      });
+    });
+  });
+
+  it('withAgentContext(null, null) keeps the inherited agent/signal', async () => {
+    const agent = { id: 'keep' };
+    await withAgentContext(agent, null, async () => {
+      await withAgentContext(null, null, async () => {
+        expect(getExecContext().agent).toBe(agent);
+      });
+    });
   });
 });
 

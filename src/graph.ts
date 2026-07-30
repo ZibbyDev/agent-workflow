@@ -16,6 +16,7 @@
 import { WorkflowState } from './state.js';
 import { Node } from './node.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
+import { withAgentContext } from './exec-context.js';
 import { ContextLoader } from './context-loader.js';
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -1340,14 +1341,22 @@ export class WorkflowGraph {
         const nodeSkillMw = (node.config?.skills || []).map(id => _skillMiddleware.get(id)).filter(Boolean);
         const allMw = [...this.middleware, ...nodeSkillMw];
 
+        // Publish this graph's agent shell + abort signal into the ALS
+        // exec-context for the duration of the node's execution, so a node
+        // that hand-rolls `dispatchSubgraph(slug, { input })` (the documented
+        // fan-out pattern) gets the parent agent + cancel signal AUTOMATICALLY
+        // — matching what the built-in sub-workflow node form plumbs
+        // explicitly. Without this, a hand-rolled in-process dispatch ran the
+        // child agent-less (LLM nodes fail) or fell back to the HTTP path.
         let result;
-        if (allMw.length > 0) {
-          result = await this._composeMiddleware(allMw, currentNode, async () => {
-            return node.execute(nodeContext, state);
-          }, state.getAll(), state);
-        } else {
-          result = await node.execute(nodeContext, state);
-        }
+        result = await withAgentContext(agent, internalAbortController.signal, async () => {
+          if (allMw.length > 0) {
+            return this._composeMiddleware(allMw, currentNode, async () => {
+              return node.execute(nodeContext, state);
+            }, state.getAll(), state);
+          }
+          return node.execute(nodeContext, state);
+        });
 
         const duration = Date.now() - startTime;
         executionLog.push({ node: currentNode, success: result.success, duration, timestamp: new Date().toISOString() });

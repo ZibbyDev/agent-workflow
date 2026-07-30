@@ -152,6 +152,18 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // backend's per-dispatch quota gate that's sufficient defense against
   // accidental + most-malicious recursion.
   const parentCtx = getExecContext();
+
+  // ── Auto-supply parentAgent + signal from the running node's context ────
+  // A hand-rolled `dispatchSubgraph(slug, { input })` inside a custom execute
+  // node (the documented fan-out pattern) usually omits these. The engine
+  // publishes the current graph's agent + abort signal into the ALS
+  // exec-context (graph.ts withAgentContext), so default from there when the
+  // caller didn't pass them — WITHOUT it the in-process child ran agent-less
+  // (LLM nodes fail) or fell back to HTTP (which hangs the parent on
+  // self-host). An EXPLICIT parentAgent/signal always wins (only fill a gap).
+  if (options.parentAgent == null && parentCtx.agent) options.parentAgent = parentCtx.agent;
+  if (options.signal == null && parentCtx.signal) options.signal = parentCtx.signal;
+
   const depthCap = Number(process.env.ZIBBY_SUBGRAPH_MAX_DEPTH || 10);
   if ((parentCtx.depth || 0) >= depthCap) {
     throw new Error(

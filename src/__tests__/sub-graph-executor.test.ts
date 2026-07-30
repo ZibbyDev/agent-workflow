@@ -373,3 +373,42 @@ describe('dispatchSubgraph — depth cap', () => {
       .resolves.toMatchObject({ jobId: 'j' });
   });
 });
+
+describe('dispatchSubgraph — auto-supply parentAgent/signal from exec-context', () => {
+  // The engine wraps each node's execute() in withAgentContext(agent, signal),
+  // so a HAND-ROLLED dispatchSubgraph inside a custom node inherits the parent
+  // agent + cancel signal automatically — the documented fan-out pattern that
+  // previously ran the child agent-less / hung on self-host. The defaulting
+  // happens before the in-process/HTTP branch, so it's observable as a mutation
+  // of the passed options (async:true keeps the HTTP stub trivial).
+  it('fills parentAgent + signal from the active context when the caller omits them', async () => {
+    const { withAgentContext } = await import('../exec-context.js');
+    const agent = { id: 'ctx-agent' };
+    const signal = new AbortController().signal;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'j' } })));
+    const opts: any = { input: {}, async: true };
+    await withAgentContext(agent, signal, () => dispatchSubgraph('child', opts));
+    expect(opts.parentAgent).toBe(agent);
+    expect(opts.signal).toBe(signal);
+  });
+
+  it('does NOT override an explicitly-passed parentAgent/signal', async () => {
+    const { withAgentContext } = await import('../exec-context.js');
+    const ctxAgent = { id: 'ctx' };
+    const ctxSignal = new AbortController().signal;
+    const explicitAgent = { id: 'explicit' };
+    const explicitSignal = new AbortController().signal;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'j' } })));
+    const opts: any = { input: {}, async: true, parentAgent: explicitAgent, signal: explicitSignal };
+    await withAgentContext(ctxAgent, ctxSignal, () => dispatchSubgraph('child', opts));
+    expect(opts.parentAgent).toBe(explicitAgent);
+    expect(opts.signal).toBe(explicitSignal);
+  });
+
+  it('leaves parentAgent undefined when there is no agent in context (top-level dispatch)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'j' } })));
+    const opts: any = { input: {}, async: true };
+    await dispatchSubgraph('child', opts);   // no withAgentContext scope
+    expect(opts.parentAgent == null).toBe(true);
+  });
+});
