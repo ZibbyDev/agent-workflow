@@ -169,9 +169,44 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
 
   const skills = finalOptions.skills || [];
   if (skills.length > 0 && !options.skipPromptFragments) {
+    // ONLY inject the fragment of an integration that is actually connected.
+    //
+    // A fragment is a full page of "you have direct access to the user's Jira"
+    // plus its tool list, and it used to be injected off the node's static
+    // `skills` declaration alone — so an account with no Jira was told it had
+    // Jira, and burned turns on tools that could only fail.
+    //
+    // The map is INJECTED, not fetched: this package is a leaf (fetching it here
+    // would mean depending on @zibby/core, which depends on us). Callers that
+    // know the truth pass `connectedIntegrations`; callers that don't pass
+    // nothing and every fragment is injected exactly as before — fail-open,
+    // because a too-generous prompt still works and a silently-empty one does not.
+    // Two sources, in order: an explicit map from the caller, else the env the
+    // executor stamps on the run (comma-separated connected provider ids). The
+    // env is what makes this work for a real agent run — nodes reach us through
+    // graph-compiler, which has no integration knowledge to pass down.
+    let connected = (options as any).connectedIntegrations as Record<string, boolean> | undefined;
+    if (!connected) {
+      const raw = process.env.WORKFLOW_CONNECTED_INTEGRATIONS;
+      if (typeof raw === 'string' && raw.trim() !== '') {
+        connected = {};
+        for (const name of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+          connected[name] = true;
+        }
+      }
+    }
+    const isAvailable = (skill: any) => {
+      const need = skill && skill.requiresIntegration;
+      if (!need) return true;                 // no integration → always on
+      if (!connected) return true;            // unknown → fail open
+      const names = Array.isArray(need) ? need : [need];
+      return names.some((n: string) => connected[n] === true);
+    };
     const fragments = skills
       .map(id => {
-        const frag = getSkill(id)?.promptFragment;
+        const skill = getSkill(id);
+        if (!isAvailable(skill)) return null;
+        const frag = skill?.promptFragment;
         return typeof frag === 'function' ? frag() : frag;
       })
       .filter(Boolean);
