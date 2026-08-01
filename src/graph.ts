@@ -915,6 +915,30 @@ export class WorkflowGraph {
   async run(agent, initialState: any = {}, options: any = {}) {
     if (!this.entryPoint) throw new Error('No entry point set for graph');
 
+    // ── Trigger-input normalization hook ────────────────────────────────
+    // An Agent subclass may need to reshape its raw trigger input before ANY
+    // node sees it — the canonical case is accepting one human-friendly field
+    // and filling the structured ones it implies (github-code-review takes a
+    // `prUrl` and derives owner/repo/prNumber).
+    //
+    // Such code used to live in an overridden `Agent.run()`, which LOOKS like
+    // the run boundary but is not the one that executes: every real run —
+    // cloud and self-host — goes through the CLI runner, which calls
+    // `agent.buildGraph()` and then `graph.run(agent, initialState)` DIRECTLY.
+    // `agent.run()` is never invoked there, so the normalization silently did
+    // nothing in production while passing every local test and unit test. The
+    // node then received `undefined` coordinates and reported an unresolvable
+    // dispatch — pointing at the caller, not at the layer that skipped the work.
+    //
+    // So the hook lives HERE, on the path that actually runs. Additive: an
+    // agent without `normalizeInput` is unaffected, and one that keeps its
+    // `run()` override still works (the helper is idempotent by construction —
+    // it no-ops once the structured fields are present).
+    if (agent && typeof agent.normalizeInput === 'function'
+        && initialState && typeof initialState === 'object' && !Array.isArray(initialState)) {
+      initialState = agent.normalizeInput(initialState) ?? initialState;
+    }
+
     // ── Abort plumbing ──────────────────────────────────────────────────
     // Single internal AbortController owned by this run. Two feeds:
     //   1. options.signal (the public contract, slice 2 of decoupling)
