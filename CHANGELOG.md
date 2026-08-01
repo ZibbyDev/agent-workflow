@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/) once it
 reaches `1.0.0`. Until then, minor version bumps may include breaking changes.
 
+## [0.6.3] - 2026-08-01
+
+### Fixed
+- **A `normalizeInput` throw is attributed, never leaked raw.** Implementations
+  legitimately throw to reject an unusable trigger input; the error now names
+  the layer (`agent.normalizeInput() rejected the trigger input: …`, original
+  as `cause`) so it can never read as an engine fault. Deliberately NOT
+  swallowed — suppressing it would hand the nodes an unusable input and
+  recreate the confusing downstream failure the hook exists to eliminate.
+
 ## [0.6.2] - 2026-08-01
 
 ### Added
