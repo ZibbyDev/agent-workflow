@@ -433,8 +433,39 @@ export class WorkflowGraph {
     return this;
   }
 
+  /**
+   * Connect `from` → `to`. Calling it AGAIN for the same `from` declares a
+   * FAN-OUT: the node's successors all run, each carrying on through its own
+   * children, instead of the second call silently replacing the first.
+   *
+   * That replacement is what this used to do (`Map.set`), and it lost work with
+   * no error anywhere: a fan-out drawn in the visual editor round-tripped
+   * through the code generator as two `addEdge` lines, compiled down to ONE
+   * edge, and ran one branch while the graph, the generated source and the UI
+   * all showed two. Appending makes the declaration and the execution agree.
+   *
+   * The single-successor case keeps the STRING shape (not a 1-element array),
+   * so every existing graph serializes and runs byte-identically.
+   */
   addEdge(from, to) {
-    this.edges.set(from, to);
+    const existing = this.edges.get(from);
+    if (existing === undefined) {
+      this.edges.set(from, to);
+    } else if (typeof existing === 'string') {
+      if (existing !== to) this.edges.set(from, [existing, to]);
+    } else if (Array.isArray(existing)) {
+      if (!existing.includes(to)) existing.push(to);
+    } else {
+      // A conditional edge already routes this node. Simple + conditional from
+      // one node is ambiguous — "always go to X" and "decide where to go" can't
+      // both be true — so we keep the LAST declaration (unchanged behaviour) and
+      // say so, rather than half-honouring both.
+      console.warn(
+        `[workflow] addEdge('${from}', '${to}') overrides the conditional edges already declared on '${from}'. `
+        + 'A node routes EITHER unconditionally (addEdge) OR conditionally (addConditionalEdges) — not both.',
+      );
+      this.edges.set(from, to);
+    }
     return this;
   }
 
@@ -444,6 +475,14 @@ export class WorkflowGraph {
   }
 
   addConditionalEdges(from, routes, { labels }: any = {}) {
+    const existing = this.edges.get(from);
+    if (existing !== undefined && !existing.conditional) {
+      // Same ambiguity as the addEdge case above, from the other direction.
+      console.warn(
+        `[workflow] addConditionalEdges('${from}', …) overrides the unconditional edge(s) already declared on '${from}' `
+        + `(${Array.isArray(existing) ? existing.join(', ') : existing}). A node routes EITHER unconditionally OR conditionally — not both.`,
+      );
+    }
     this.edges.set(from, { conditional: true, routes, labels });
     if (typeof routes === 'function') this.conditionalCodeMap.set(from, routes.toString());
     return this;
@@ -452,6 +491,60 @@ export class WorkflowGraph {
   setEntryPoint(nodeName) {
     this.entryPoint = nodeName;
     return this;
+  }
+
+  /** Unconditional successors of `id` — [] for a leaf or a conditional node. */
+  _simpleTargets(id) {
+    const e = this.edges.get(id);
+    if (e === undefined) return [];
+    if (typeof e === 'string') return [e];
+    if (Array.isArray(e)) return e;
+    return []; // conditional — resolved at run time, never statically
+  }
+
+  /**
+   * Static analysis the fan-out scheduler runs on: which edges CLOSE A CYCLE,
+   * and how many branches converge on each node.
+   *
+   * Both are computed over UNCONDITIONAL edges only, deliberately. A
+   * conditional edge's targets can only be guessed by parsing the route
+   * function's source (`_inferConditionalTargets`) — fine for drawing a
+   * diagram, far too fragile to decide whether a node is allowed to run. So a
+   * conditional arrival always schedules its target immediately, exactly as it
+   * does today, and a JOIN is defined over the unconditional edges that a
+   * fan-out actually creates.
+   *
+   * Back-edges are excluded from the join count for the same reason a loop
+   * works today: a node that a later node routes BACK to must not sit waiting
+   * for that later node to arrive — it would deadlock the retry loops that
+   * already ship (`route back to fetch` after a failure).
+   *
+   * @returns {{ backEdges: Set<string>, joinDegree: Map<string, number> }}
+   *          backEdges keyed `"<from>-><to>"`; joinDegree = inbound branches.
+   */
+  _analyzeFlow() {
+    const backEdges = new Set<string>();
+    const colour = new Map<string, number>(); // 0/undef = unseen, 1 = on stack, 2 = done
+    const visit = (id) => {
+      colour.set(id, 1);
+      for (const t of this._simpleTargets(id)) {
+        if (!t || t === 'END') continue;
+        const c = colour.get(t) || 0;
+        if (c === 1) backEdges.add(`${id}->${t}`);
+        else if (c === 0) visit(t);
+      }
+      colour.set(id, 2);
+    };
+    if (this.entryPoint) visit(this.entryPoint);
+
+    const joinDegree = new Map<string, number>();
+    for (const [from] of this.edges) {
+      for (const t of this._simpleTargets(from)) {
+        if (!t || t === 'END' || backEdges.has(`${from}->${t}`)) continue;
+        joinDegree.set(t, (joinDegree.get(t) || 0) + 1);
+      }
+    }
+    return { backEdges, joinDegree };
   }
 
   use(middlewareFn) {
@@ -614,6 +707,11 @@ export class WorkflowGraph {
     for (const [from, target] of this.edges) {
       if (typeof target === 'string') {
         edges.push({ source: from, target });
+      } else if (Array.isArray(target)) {
+        // FAN-OUT: one edge per branch, drawn straight from the node. NOT a
+        // decision diamond — a diamond means "one of these", and every one of
+        // these runs. The viewer already lays out multi-target nodes.
+        for (const t of target) edges.push({ source: from, target: t });
       } else if (target.conditional) {
         const codeStr = this.conditionalCodeMap.get(from) || target.routes.toString();
         const possibleTargets: any[] = this._inferConditionalTargets(target.routes, target.labels);
@@ -1111,7 +1209,45 @@ export class WorkflowGraph {
       }
     }
 
-    let currentNode = this.entryPoint;
+    // ── Fan-out scheduler ───────────────────────────────────────────────────
+    // Replaces the single cursor this loop used to carry. A graph where every
+    // node has ONE successor behaves exactly as before (the stack never holds
+    // more than one id), so a linear pipeline is byte-identical; the scheduler
+    // only becomes visible when a node declares several.
+    //
+    // ORDER is depth-first in DECLARATION order: the first branch runs all the
+    // way through its own children before the second branch starts. That is the
+    // shape the graph draws and the one a reader expects — "these two branches"
+    // reads as two stories, not as an interleaving.
+    //
+    // Execution is SEQUENTIAL, not concurrent, and that is a deliberate stop
+    // line rather than an unfinished half. The engine hangs three things off
+    // "the node running right now" — `_currentNodeTools` / `_currentNodeConfig`
+    // on the shared state, the timeline's single `_currentNode`, and its
+    // stdout/stderr interception — and two nodes running at once would read
+    // each other's tools and interleave each other's logs. Making those
+    // per-branch is real work (see the module notes); running branches one
+    // after another needs none of it and is already the whole feature for a
+    // graph whose branches are independent.
+    const { backEdges, joinDegree } = this._analyzeFlow();
+    const arrivals = new Map<string, number>(); // join node → branches arrived so far
+    const ready: string[] = [];
+    /**
+     * Schedule `to` after `from` finished. A node several branches converge on
+     * waits for ALL of them (its join degree) before running — once, not once
+     * per branch — and re-arms afterwards so a loop can drive it again.
+     */
+    const schedule = (to, from, viaSimpleEdge) => {
+      if (!to || to === 'END') return;
+      const degree = joinDegree.get(to) || 0;
+      if (viaSimpleEdge && degree > 1 && !backEdges.has(`${from}->${to}`)) {
+        const arrived = (arrivals.get(to) || 0) + 1;
+        if (arrived < degree) { arrivals.set(to, arrived); return; } // other branches still running
+        arrivals.set(to, 0);
+      }
+      if (!ready.includes(to)) ready.push(to);
+    };
+    if (this.entryPoint) ready.push(this.entryPoint);
     const executionLog = [];
 
     // Recursion guard: a conditional edge that routes back to itself (or any
@@ -1124,11 +1260,16 @@ export class WorkflowGraph {
     let stepCount = 0;
 
     try {
-    while (currentNode && currentNode !== 'END') {
+    while (ready.length > 0) {
+      // Depth-first: pop the most recently scheduled node, so a branch runs to
+      // its end before the next one starts.
+      const currentNode = ready.pop();
+      if (!currentNode || currentNode === 'END') continue;
       if (++stepCount > maxSteps) {
         throw new Error(
-          `Workflow exceeded recursion limit (${maxSteps}) — likely a cyclic ` +
-          `conditional route. Set config.recursionLimit if you need a higher cap.`
+          `Workflow exceeded recursion limit (${maxSteps}) — the cap counts NODE EXECUTIONS, so this is ` +
+          `either a cyclic conditional route or a graph whose branches total more nodes than the cap. ` +
+          `Set config.recursionLimit if you need a higher cap.`
         );
       }
 
@@ -1428,13 +1569,19 @@ export class WorkflowGraph {
 
         const edge = this.edges.get(currentNode);
         if (!edge) {
-          currentNode = 'END';
+          // Leaf: this branch is finished. Others may still be queued.
         } else if (edge.conditional) {
           const nextNode = edge.routes(state.getAll());
           timeline.route(currentNode, nextNode);
-          currentNode = nextNode;
+          // A conditional picks ONE path and takes it now — no join accounting
+          // (see _analyzeFlow: joins are defined over unconditional edges).
+          schedule(nextNode, currentNode, false);
+        } else if (Array.isArray(edge)) {
+          // FAN-OUT. Pushed in reverse so the FIRST-declared branch is the first
+          // one popped — declaration order is what the graph draws.
+          for (let i = edge.length - 1; i >= 0; i--) schedule(edge[i], currentNode, true);
         } else {
-          currentNode = edge;
+          schedule(edge, currentNode, true);
         }
       } catch (error) {
         if (timeline.isInsideNode) {

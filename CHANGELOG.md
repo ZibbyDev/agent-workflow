@@ -6,6 +6,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/) once it
 reaches `1.0.0`. Until then, minor version bumps may include breaking changes.
 
+## [0.6.2] - 2026-08-01
+
+### Added
+- **Fan-out: one node → several branches, each with its own children.** Calling
+  `addEdge` more than once from the same node now declares a fan-out instead of
+  replacing the previous edge. Branches run sequentially, depth-first, in
+  declaration order, and a node several branches converge on waits for all of
+  them and runs ONCE — with every branch's output already in state. It re-arms
+  if a loop drives the fan-out again.
+
+### Fixed
+- **A fan-out no longer disappears silently.** `addEdge` was `Map.set`, so a
+  second edge from the same node replaced the first with no error anywhere: a
+  fan-out drawn in the visual editor survived the graph JSON, survived the code
+  generator (two `addEdge` lines), then collapsed to one edge at run time — one
+  branch ran and the other vanished, while the graph, the generated source and
+  the UI all showed two. `serialize()` now emits one edge per branch, so the
+  drawn graph and the executed graph agree.
+
+### Unchanged
+- Linear graphs are byte-identical: a single successor keeps the string edge
+  shape and the scheduler never holds more than one node. Conditional routing,
+  conditional retry loops, retries, the recursion cap, stop/abort and the
+  timeline all behave exactly as before. Execution stays SEQUENTIAL — concurrent
+  branches would need per-branch tool state, timeline and stdout capture, which
+  this release deliberately does not fake. Use sub-graphs for real parallelism.
+
 ## [0.4.29] - 2026-07-08
 
 ### Removed

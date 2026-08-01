@@ -165,6 +165,7 @@ If you want to compose Claude Code + Codex + Gemini into one pipeline with struc
 | Primitive | What it does |
 |---|---|
 | `Graph` | The DAG. `addNode`, `addEdge`, `addConditionalEdges`, `setEntryPoint`. |
+| Fan-out | Call `addEdge` more than once from the same node and **every** branch runs, each carrying on through its own children. Branches run sequentially in declaration order (depth-first: a branch finishes before the next starts). Where branches converge, the shared node waits for all of them and runs **once** — see [Fan-out](#fan-out) below. |
 | `Node` | One agent invocation. Config: `prompt`, `outputSchema` (Zod), optional `agent`, `retries`, `skills`. |
 | Sub-graph node | `addNode(name, { workflow: 'other-name', ... })` — dispatches another deployed workflow as a child. Sync (poll + merge) or async (`async: true`, fire-and-forget). See [Sub-graphs](#sub-graphs) below. |
 | `AgentStrategy` | Abstract base. Implement `canHandle(ctx)` and `invoke(prompt, opts)`. |
@@ -176,6 +177,35 @@ If you want to compose Claude Code + Codex + Gemini into one pipeline with struc
 | `timeline` | CLI progress UX + structured `__WORKFLOW_GRAPH_LOG__` markers consumed by Studio. |
 
 State flows automatically: when node `plan` completes with output `{ tasks: [...] }`, that lands at `state.plan.tasks` and downstream nodes see it.
+
+---
+
+## Fan-out
+
+One node, several branches, each with its own children:
+
+```js
+const graph = new Graph()
+  .addNode('gather', { prompt: 'Collect the diff', outputSchema: Diff })
+  .addNode('security', { prompt: 'Security review',    outputSchema: Findings })
+  .addNode('perf',     { prompt: 'Performance review', outputSchema: Findings })
+  .addNode('triage',   { prompt: 'Rank the findings',  outputSchema: Findings })
+  .addNode('report',   { prompt: 'Write it up',        outputSchema: Report })
+  .addEdge('gather', 'security')   // branch 1
+  .addEdge('gather', 'perf')       // branch 2
+  .addEdge('perf', 'triage')       //   …with its own child
+  .addEdge('security', 'report')   // both branches converge
+  .addEdge('triage', 'report')
+  .setEntryPoint('gather');
+```
+
+The contract:
+
+- **Every branch runs.** Declaring a second edge from a node used to *replace* the first; now it adds one.
+- **Sequentially, depth-first, in declaration order** — branch 1 runs all the way through its children, then branch 2. Deliberately not concurrent: the engine binds "the node running right now" to shared state (`_currentNodeTools`), to the timeline's single current node, and to its stdout interception, so two nodes at once would read each other's tools and interleave each other's logs. Sequential branches need none of that. For genuine parallelism, dispatch each branch as a [sub-graph](#sub-graphs) — separate processes, no shared state.
+- **A join runs once.** A node several branches converge on waits for all of them, then runs a single time with every branch's output already in state (`state.security`, `state.triage`). It re-arms if a loop drives the fan-out again.
+- **Conditional edges are unchanged** — `addConditionalEdges` still picks exactly one path. A join is defined over the unconditional edges a fan-out creates; a conditional arrival schedules its target immediately, as it always has.
+- **A node routes either unconditionally or conditionally, not both.** Mixing them on one node warns and keeps the last declaration.
 
 ---
 
