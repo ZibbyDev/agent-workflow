@@ -50,3 +50,20 @@ describe('graph.run — normalizeInput hook', () => {
     expect(res.state.a).toBe(1);
   });
 });
+
+describe('graph.run — normalizeInput failure attribution', () => {
+  it('lets a REJECTION through, but names the layer that raised it', async () => {
+    // Implementations throw here on purpose to reject an unusable trigger input,
+    // and that message is the most useful thing a caller can get. Swallowing it
+    // (as `cleanup()` is deliberately swallowed) would hand the nodes an
+    // unusable input and recreate the confusing downstream failure this hook
+    // exists to eliminate.
+    const g: any = new WorkflowGraph({});
+    g.addNode('only', { outputSchema: z.object({ seen: z.any() }), execute: async () => ({ seen: 1 }) });
+    g.setEntryPoint('only'); g.addEdge('only', 'END');
+    const agent: any = {
+      normalizeInput: () => { throw new Error('provide either a PR URL or the triple'); },
+    };
+    await expect(g.run(agent, { a: 1 })).rejects.toThrow(/normalizeInput\(\).*provide either a PR URL/);
+  });
+});

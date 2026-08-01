@@ -1032,9 +1032,25 @@ export class WorkflowGraph {
     // agent without `normalizeInput` is unaffected, and one that keeps its
     // `run()` override still works (the helper is idempotent by construction —
     // it no-ops once the structured fields are present).
+    // A throw here is ATTRIBUTED, not swallowed. `cleanup()` below is wrapped
+    // and warned because a buggy cleanup must not mask why a run ended; this
+    // hook is the opposite case — implementations legitimately throw to REJECT
+    // an unusable trigger input (github-code-review: "provide either a PR URL
+    // or the owner/repo/prNumber triple"), and that message is the single most
+    // useful thing the caller can receive. Suppressing it would hand the nodes
+    // an unusable input and turn a clear complaint into the confusing
+    // downstream failure this hook exists to eliminate. So: let it through,
+    // but name the layer, so it can never read as an engine fault.
     if (agent && typeof agent.normalizeInput === 'function'
         && initialState && typeof initialState === 'object' && !Array.isArray(initialState)) {
-      initialState = agent.normalizeInput(initialState) ?? initialState;
+      try {
+        initialState = agent.normalizeInput(initialState) ?? initialState;
+      } catch (err: any) {
+        const e: any = new Error(`agent.normalizeInput() rejected the trigger input: ${err?.message || err}`);
+        e.cause = err;
+        e.code = err?.code || 'NORMALIZE_INPUT_FAILED';
+        throw e;
+      }
     }
 
     // ── Abort plumbing ──────────────────────────────────────────────────
