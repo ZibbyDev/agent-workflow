@@ -293,3 +293,23 @@ describe('strategy-registry', () => {
     });
   });
 });
+
+describe('per-node model pin (the fifth executor read-site)', () => {
+  it('a saved node pin beats every other source', async () => {
+    const { resolveInvocationModel } = await import('../strategy-registry');
+    expect(resolveInvocationModel({
+      nodeConfigModel: 'opus-4.7',
+      config: { models: { fetch: 'sonnet-4.6', default: 'haiku' } },
+      options: { nodeName: 'fetch', model: 'x' },
+      strategyName: 'claude',
+      envModel: 'sonnet-4.6',
+    })).toBe('opus-4.7');
+  });
+
+  it("'auto'/empty pins fall through to the run-level chain", async () => {
+    const { resolveInvocationModel } = await import('../strategy-registry');
+    expect(resolveInvocationModel({ nodeConfigModel: 'auto', envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
+    expect(resolveInvocationModel({ nodeConfigModel: '  ', envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
+    expect(resolveInvocationModel({ envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
+  });
+});

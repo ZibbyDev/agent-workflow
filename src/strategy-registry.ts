@@ -66,14 +66,27 @@ export function listStrategies() {
  */
 /**
  * The ONE place an invocation's model is resolved. Chain, most-specific first:
- *   config.models[node] > config.models.default > config.agent[vendor].model
+ *   nodeConfigModel (the operator's saved per-node pin, shipped with the run's
+ *   nodeConfigs and overlaid per node — see below)
+ *   > config.models[node] > config.models.default > config.agent[vendor].model
  *   > options.model (the node's explicit per-call pick, e.g. triage's cheap tier)
  * Pure function so the contract is unit-tested — the o4-mini incident was this
  * chain resolving to null and the strategy silently substituting its vendor
  * default underneath us.
+ *
+ * nodeConfigModel closed the FIFTH executor-drift read-site: the dashboard's
+ * per-node model pin (workflow row nodeConfigOverrides[node].model) always
+ * SHIPPED with container runs (state.nodeConfigs → _currentNodeConfig) and this
+ * chain always honored config.models[node] — but nothing connected the two, so
+ * a pinned node silently ran the run-level MODEL instead (found live: a
+ * gitlab-kb-sync fetch node pinned to opus ran sonnet). The copilot turn
+ * runtime had the same class fixed earlier — each executor re-reading model
+ * config is one more chance to drift; this wires the last container-side one.
  */
-export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel }: any = {}) {
+export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel, nodeConfigModel }: any = {}) {
   const modelsConfig = config.models || {};
+  const pinnedModel = (typeof nodeConfigModel === 'string' && nodeConfigModel.trim() && nodeConfigModel.trim() !== 'auto')
+    ? nodeConfigModel.trim() : null;
   const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
   const globalModel = modelsConfig.default || null;
   const agentModel = config.agent?.[strategyName]?.model || null;
@@ -83,7 +96,7 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
   // "nothing" is what let the strategy's hardcoded vendor default run instead
   // of the model the operator chose.
   const runModel = (typeof envModel === 'string' ? envModel.trim() : '') || null;
-  return nodeModel || globalModel || agentModel || options.model || runModel || null;
+  return pinnedModel || nodeModel || globalModel || agentModel || options.model || runModel || null;
 }
 
 export function getAgentStrategy(context: any = {}) {
@@ -139,11 +152,21 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   const strategy = getAgentStrategy(ctx);
 
   const config = stateView.config || options.config || {};
+  // The operator's saved per-node pin rides _currentNodeConfig (the same
+  // per-node overlay that injects custom prompts + stores). VENDOR GUARD: a
+  // node pinned to a DIFFERENT vendor than this run's strategy must not leak
+  // its model id into this vendor's invocation (the run is single-vendor —
+  // "locked node still needs a KEY" — so a foreign pin is inert here and the
+  // chain falls through to the run-level pick).
+  const nodePin = stateView._currentNodeConfig || {};
+  const nodePinAgent = typeof nodePin.agent === 'string' ? nodePin.agent.trim() : '';
+  const nodeConfigModel = (!nodePinAgent || nodePinAgent === strategy.name) ? nodePin.model : null;
   const model = resolveInvocationModel({
     config,
     options,
     strategyName: strategy.name,
     envModel: process.env.MODEL,
+    nodeConfigModel,
   });
 
   const finalOptions: any = {
