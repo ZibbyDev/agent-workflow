@@ -225,10 +225,23 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
       const names = Array.isArray(need) ? need : [need];
       return names.some((n: string) => connected[n] === true);
     };
+    // The fragment FOLLOWS the mount. A skill that declares
+    // `inProcessOnly: true` executes its tools inside the ASSISTANT strategy's
+    // own loop (handleToolCall) and mounts NO MCP server — under a native
+    // strategy (claude/codex/gemini) those tools simply don't exist, so
+    // injecting its fragment advertised tools the model could never call
+    // (the git skill's `git_checkout` under claude burned turns hunting for
+    // it, 2026-08-02 run log). Same disease as the connected-integrations
+    // gate above, same cure: only describe what is actually there. No
+    // declaration → inject exactly as before (fail-open).
+    const strategyRunsInProcessTools = strategy.name === 'assistant';
+    const isMounted = (skill: any) =>
+      skill?.inProcessOnly !== true || strategyRunsInProcessTools;
     const fragments = skills
       .map(id => {
         const skill = getSkill(id);
         if (!isAvailable(skill)) return null;
+        if (!isMounted(skill)) return null;
         const frag = skill?.promptFragment;
         return typeof frag === 'function' ? frag() : frag;
       })

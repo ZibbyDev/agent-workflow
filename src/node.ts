@@ -160,6 +160,13 @@ export class Node {
           workspace: cwd,
           schema: this.isZodSchema ? this.outputSchema : null,
           skills: this.config.skills || [],
+          // Per-node tool DENY list (least privilege, declaration-driven). A
+          // node that only READS (a kb-sync fetch adapter) declares the write
+          // tools it must never hold (`disallowedTools: ['mcp__gitlab__gitlab_accept_mr', …]`)
+          // and the strategy passes them to the runtime's disallow layer.
+          // Flows through invokeAgent options untouched; strategies that have
+          // no disallow mechanism ignore it.
+          disallowedTools: this.config.disallowedTools || [],
           // Native agent plugins declared on the node (e.g. Codex plugins:
           // `plugins: [{ name, marketplacePath }]`). Flows like `skills` →
           // the selected strategy decides what to do with it (the Codex

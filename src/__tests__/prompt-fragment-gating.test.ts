@@ -69,3 +69,42 @@ describe('promptFragment gating', () => {
     expect(captured).toContain('direct access');
   });
 });
+
+describe('promptFragment follows the MOUNT (inProcessOnly skills)', () => {
+  // The git skill's tools run ONLY inside the assistant strategy's loop
+  // (handleToolCall; resolve() → null, no MCP server). Under a native strategy
+  // its fragment advertised git_checkout to a model that could never call it —
+  // the 2026-08-02 gitlab-kb-sync run burned turns hunting for it.
+  beforeEach(() => {
+    registerSkill({
+      id: 'git-like',
+      inProcessOnly: true,
+      promptFragment: '## Git Repositories\n- git_checkout: clone a repo',
+      resolve: () => null,
+      tools: [{ name: 'git_checkout' }],
+      handleToolCall: async () => 'ok',
+    } as any);
+  });
+
+  it('drops an inProcessOnly fragment under a NATIVE (non-assistant) strategy', async () => {
+    await invokeAgent('B', ctx, { skills: ['git-like'] });
+    expect(captured).not.toContain('git_checkout');
+    expect(captured).not.toContain('## Git Repositories');
+  });
+
+  it('keeps the fragment under the assistant strategy (tools really run there)', async () => {
+    registerStrategy({
+      name: 'assistant',
+      getName: () => 'assistant',
+      canHandle: () => true,
+      async invoke(prompt: string) { captured = prompt; return { output: 'ok' }; },
+    } as any);
+    await invokeAgent('B', { state: { agentType: 'assistant' } }, { skills: ['git-like'] });
+    expect(captured).toContain('git_checkout');
+  });
+
+  it('a skill WITHOUT the flag is injected exactly as before (fail-open)', async () => {
+    await invokeAgent('B', ctx, { skills: ['code-scan'] });
+    expect(captured).toContain('Code scan');
+  });
+});

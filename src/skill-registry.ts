@@ -56,6 +56,11 @@ const _sources = globalThis[SOURCES_KEY];
  * @param {Object[]} [skill.tools]        - Tool schemas for compile-time validation
  * @param {string}   [skill.cursorKey]    - Override key for ~/.cursor/mcp.json
  * @param {Function} [skill.promptFragment] - () => string | string injected into agent prompt
+ * @param {boolean}  [skill.inProcessOnly] - true when the skill's tools run ONLY inside the
+ *                                           assistant strategy's loop (handleToolCall; no MCP
+ *                                           server). Its promptFragment is then injected ONLY
+ *                                           under that strategy — never advertise tools a
+ *                                           native strategy (claude/codex/gemini) can't mount.
  * @param {Function} [skill.middleware]   - async () => middlewareFn | null
  * @param {Object}   [opts]
  * @param {string}   [opts.source]        - Provenance (package name) registering this skill.
