@@ -623,6 +623,21 @@ export class WorkflowGraph {
       if (typeof node?.config?.dispatchesWorkflow === 'string' && node.config.dispatchesWorkflow.trim()) {
         config.dispatchesWorkflow = node.config.dispatchesWorkflow.trim();
       }
+      // Per-node VENDOR PIN declared on the node config
+      // (`graph.addNode(n, { ...node, agent: 'claude' })`). The RUNTIME already
+      // honours it as the highest-precedence per-node vendor pin (node.ts:
+      // `this.config.agent ?? config.agents[name]`), but it was never
+      // SERIALIZED — so the dashboard's model-node renderer, which reads
+      // `cfg.agent` to draw a LOCKED disc, could not see a template's pin and
+      // showed an interactive picker for a vendor the operator cannot actually
+      // change. Whitelisted here (display-only, like `description`/`skills`) so
+      // the locked disc is drawn from the DECLARATION — no per-agent branch, no
+      // renderer change. Guarded: a node with no pin gets no `config.agent` key,
+      // so every existing graph serializes byte-identically except the handful
+      // that genuinely pin a node's vendor (which SHOULD read as locked).
+      if (typeof node?.config?.agent === 'string' && node.config.agent.trim()) {
+        config.agent = node.config.agent.trim();
+      }
       if (node.outputSchema) {
         if (typeof node.outputSchema._def !== 'undefined') {
           // Robust convert: prefer Zod v4's native converter, fall back to the
