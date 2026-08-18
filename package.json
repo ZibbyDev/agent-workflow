@@ -1,6 +1,6 @@
 {
   "name": "@zibby/agent-workflow",
-  "version": "0.6.8",
+  "version": "2.0.0",
   "description": "Graph-based AI agent workflow orchestration. Bring your own agent strategies.",
   "type": "module",
   "main": "dist/index.js",
