@@ -175,6 +175,26 @@ describe('strategy-registry', () => {
       expect(received.options.workspace).toBe('/tmp/x');
     });
 
+    it('forwards state.extraMcpServers to the strategy (the field core\'s forked copy dropped)', async () => {
+      // An agent's custom MCP servers ride the run state: the executor resolves
+      // workflow.customMcp → ZIBBY_CUSTOM_MCP → the run CLI parses it onto
+      // initialState.extraMcpServers. Everything downstream (claude/codex/gemini
+      // strategies) reads options.extraMcpServers, so THIS hop is what makes an
+      // attached browser/Figma/Linear server visible to the model.
+      const { registerStrategy, invokeAgent } = await loadFreshRegistry();
+      let received;
+      registerStrategy(
+        new FakeStrategy('alpha', {
+          invoke: async (_prompt, options) => { received = options; return 'ok'; },
+        })
+      );
+
+      const servers = [{ serverName: 'mcp_8faec046', def: { transport: 'http', url: 'https://x/mcp' } }];
+      await invokeAgent('go', { preferredAgent: 'alpha', state: { extraMcpServers: servers } }, {});
+
+      expect(received.extraMcpServers).toEqual(servers);
+    });
+
     it('appends extraPromptInstructions from current node config', async () => {
       const { registerStrategy, invokeAgent } = await loadFreshRegistry();
       let captured;

@@ -99,6 +99,41 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
   return pinnedModel || nodeModel || globalModel || agentModel || options.model || runModel || null;
 }
 
+/**
+ * The per-invocation PASSTHROUGH options — the fields a strategy needs that are
+ * sourced from (in order) the explicit per-call options, the run state, then the
+ * node context. ONE implementation, imported by every invokeAgent.
+ *
+ * WHY IT IS A SHARED FUNCTION: this package's invokeAgent (the engine path) and
+ * @zibby/core's invokeAgent (what a template CODE NODE imports) each built this
+ * object by hand, and the two lists drifted — core's never carried
+ * `extraMcpServers` at all, so an agent's custom MCP servers reached prompt
+ * nodes and silently vanished for every code node. Found live 2026-08-18: a
+ * browser MCP server attached to frontend-specialist, resolved by the executor,
+ * delivered into the run container, parsed by the CLI onto
+ * state.extraMcpServers — and then dropped one line before the strategy, so the
+ * QA node reported "no browser tools". Same executor-drift class as the model
+ * chain (resolveInvocationModel, above), same cure: derive, don't duplicate.
+ * A field added here now reaches BOTH paths by construction.
+ */
+export function resolveInvocationExtras({ options = {}, stateView = {}, context = {} }: any = {}) {
+  return {
+    workspace: stateView.workspace || options.workspace,
+    schema: options.schema || context.schema,
+    images: options.images || context.images || [],
+    skills: options.skills || context.skills || [],
+    // Ad-hoc per-agent remote MCP servers (row instance data — like skills, NOT
+    // a registered skill). The executor resolves the workflow row's customMcp
+    // into [{serverName, def}] and puts it on state; strategies merge it into
+    // their mcpServers map after registry skills. See plans/custom-mcp-per-agent.
+    extraMcpServers: options.extraMcpServers || stateView.extraMcpServers || context.extraMcpServers || [],
+    // Native agent plugins (mirrors `skills`). Passed through to the strategy;
+    // only the Codex strategy consumes it (installs into CODEX_HOME), others
+    // ignore it. No prompt fragments derive from plugins.
+    plugins: options.plugins || context.plugins || [],
+  };
+}
+
 export function getAgentStrategy(context: any = {}) {
   const { state = {}, preferredAgent = null } = context;
   const requested = preferredAgent || state.agentType || process.env.AGENT_TYPE;
@@ -172,19 +207,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   const finalOptions: any = {
     ...options,
     model,
-    workspace: stateView.workspace || options.workspace,
-    schema: options.schema || context.schema,
-    images: options.images || context.images || [],
-    skills: options.skills || context.skills || [],
-    // Ad-hoc per-agent remote MCP servers (row instance data — like skills, NOT
-    // a registered skill). The executor resolves the workflow row's customMcp
-    // into [{serverName, def}] and puts it on state; strategies merge it into
-    // their mcpServers map after registry skills. See plans/custom-mcp-per-agent.
-    extraMcpServers: options.extraMcpServers || stateView.extraMcpServers || context.extraMcpServers || [],
-    // Native agent plugins (mirrors `skills`). Passed through to the strategy;
-    // only the Codex strategy consumes it (installs into CODEX_HOME), others
-    // ignore it. No prompt fragments derive from plugins.
-    plugins: options.plugins || context.plugins || [],
+    ...resolveInvocationExtras({ options, stateView, context }),
     config,
   };
 
