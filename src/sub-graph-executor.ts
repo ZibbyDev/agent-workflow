@@ -35,7 +35,7 @@
  */
 
 import { logger } from './logger.js';
-import { runInProcessSubgraph, SubgraphFallback } from './in-process-subgraph.js';
+import { runInProcessSubgraph, SubgraphFallback, subgraphTimeoutError } from './in-process-subgraph.js';
 import { getExecContext } from './exec-context.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
@@ -114,7 +114,13 @@ function resolveOutput(finalState, output) {
  *   Override the conversation id seen by the child. Omit to let the
  *   child run without one.
  * @param {number} [options.timeoutMs=600000]
- *   Sync mode only: how long to poll before giving up.
+ *   Sync mode only: the child's budget, honoured on BOTH dispatch paths.
+ *   HTTP — how long to poll before giving up (the child keeps running in
+ *   its own task). In-process — how long the child may run before it is
+ *   ABORTED (it is this process), additionally clamped down to the
+ *   parent's own remaining wall clock. Either way the dispatch rejects
+ *   with `code: 'SUBGRAPH_TIMEOUT'`, so a fleet's Promise.allSettled
+ *   books a failure for THAT child and the parent's run continues.
  * @param {number} [options.pollIntervalMs=2000]
  *   Sync mode only: how often to GET the child's execution row.
  * @param {string | ((finalState: object) => any)} [options.output]
@@ -185,6 +191,18 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // runtime mismatch, depth exceeded) — caught below, continue to HTTP.
   // Typed errors (quota, not-found, validation) are re-thrown because
   // HTTP would surface the same shape.
+  // ── The sync budget, resolved ONCE for BOTH paths ───────────────────────
+  // This used to be computed down in the HTTP poll loop only, so the
+  // in-process fast path — which is the DEFAULT — silently ran with no
+  // deadline at all: `timeoutMs` was declared by the caller, parsed by this
+  // function, and then dropped (the call below forwarded input /
+  // conversationId / signal / parentAgent and nothing else). A wedged child
+  // therefore consumed the PARENT's whole container budget instead of its
+  // own, and a fleet's per-child failure isolation (Promise.allSettled around
+  // N dispatches — every board-runner lane) could never fire. One resolution,
+  // one variable, both consumers: the paths cannot drift again.
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
+
   if (
     process.env.ZIBBY_INPROCESS_SUBGRAPH !== '0'
     && !options.async
@@ -196,6 +214,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
         conversationId: options.conversationId,
         signal: options.signal,
         parentAgent: options.parentAgent,
+        timeoutMs,
       });
       const extracted = resolveOutput(finalState, options.output);
       logger.info(`[sub-graph] '${workflowName}' completed in-process`);
@@ -301,7 +320,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   }
 
   // Sync: poll the child's execution until it reaches a terminal status.
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
+  // `timeoutMs` was resolved once, up top, and is shared with the in-process
+  // path — do NOT re-derive it here (that split is what made the knob inert
+  // on the default path).
   const pollIntervalMs = Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : DEFAULT_POLL_INTERVAL_MS;
   const statusUrl = `${apiBase}/executions/${encodeURIComponent(jobId)}`;
   const deadline = Date.now() + timeoutMs;
@@ -344,8 +365,5 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // Timed out without reaching terminal — cancel the child? For v1 we
   // just throw so the parent's error path runs; manual cleanup via the
   // activity tab. Orphan-reaper Lambda (future) handles long-term cleanup.
-  const e: any = new Error(`Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`);
-  e.subgraphJobId = jobId;
-  e.subgraphStatus = lastStatus;
-  throw e;
+  throw subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus);
 }

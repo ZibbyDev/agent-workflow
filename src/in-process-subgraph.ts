@@ -79,6 +79,136 @@ export class SubgraphFallback extends Error {
 }
 
 /**
+ * The error a sync sub-graph dispatch throws when it outlives its budget.
+ *
+ * ONE shape for BOTH dispatch paths. The HTTP path stops POLLING at the
+ * deadline (the child keeps running in its own task); the in-process path
+ * ABORTS the child (it is this process). What the PARENT sees — the message,
+ * `.code`, `.subgraphJobId`, `.subgraphStatus` — must be identical either
+ * way, or a `Promise.allSettled` fleet that classifies its rejections (every
+ * board-runner lane does) behaves differently depending on a routing decision
+ * it never made. Two places that must agree ⇒ one constructor.
+ */
+export function subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus = 'timeout') {
+  const e: any = new Error(
+    `Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`,
+  );
+  // `.code` is NEW on the HTTP path (it had message + jobId + status only) and
+  // purely additive — it gives a fleet a stable discriminator that does not
+  // depend on parsing English. `.subgraphStatus` keeps its existing meaning on
+  // each path: the last status the poller SAW (HTTP), or the terminal status we
+  // just wrote (in-process, which really is `timeout`).
+  e.code = 'SUBGRAPH_TIMEOUT';
+  e.subgraphJobId = jobId;
+  e.subgraphStatus = lastStatus;
+  return e;
+}
+
+/**
+ * How long an IN-PROCESS child may run, in ms — or `null` for "no deadline".
+ *
+ * Two inputs, and the SMALLER wins:
+ *
+ *   1. `timeoutMs` — the budget the dispatch DECLARED. On the HTTP path this
+ *      has always been honoured (it bounds the poll loop). In-process it was
+ *      dropped on the floor: `dispatchSubgraph` forwarded input/conversationId/
+ *      signal/parentAgent and nothing else, so `childGraph.run()` ran with no
+ *      deadline of its own and a wedged child burned the PARENT's whole
+ *      container budget. That is the defect this function closes — a declared
+ *      knob that the engine parsed and did not honour.
+ *
+ *   2. The parent's REMAINING wall clock. `MAX_WORKFLOW_DURATION_MS` is
+ *      injected into every run container by workflow-executor.js and is the
+ *      in-container watchdog's own number (it `process.exit(124)`s at it), so
+ *      it is the truth about when this container dies. `process.uptime()` is a
+ *      LOWER bound on the real run age (container start + image pull happen
+ *      before node does), which makes `remaining` an UPPER bound — erring, as
+ *      it must, toward "the child gets slightly less than it asked for".
+ *      Same convention as frontend-specialist's `runtimeBudget()`.
+ *
+ * Why clamp at all: a child that asks for 40 minutes when 5 remain cannot get
+ * 40. Without the clamp the watchdog SIGKILLs the whole container and the
+ * child's execution row is left `running` until a reaper finds it. With it,
+ * the child aborts, `finalize` books it `timeout`, and the parent's own
+ * remaining nodes at least get to observe that.
+ *
+ * `null` (no cap declared AND no budget injected — a local `zibby test`, an
+ * older platform) means NO deadline: this function exists to honour a declared
+ * bound, never to invent one where nobody declared any.
+ *
+ * @param {number} [timeoutMs]      the dispatch's declared budget, ms.
+ * @param {object} [env]            defaults to process.env.
+ * @param {number} [uptimeSeconds]  defaults to process.uptime().
+ * @returns {number|null} ms until the child must be aborted, or null.
+ */
+export function resolveChildTimeoutMs(timeoutMs?, env: any = process.env, uptimeSeconds = process.uptime()) {
+  // `Number.isFinite` — the SAME gate the HTTP path applies to options.timeoutMs
+  // (sub-graph-executor.ts), so 0 / negatives mean the same thing on both paths.
+  const declared = Number.isFinite(timeoutMs) ? Number(timeoutMs) : null;
+
+  const rawCap = Number(env && env.MAX_WORKFLOW_DURATION_MS);
+  const elapsedMs = Number.isFinite(uptimeSeconds) && uptimeSeconds > 0 ? uptimeSeconds * 1000 : 0;
+  const remaining = Number.isFinite(rawCap) && rawCap > 0 ? rawCap - elapsedMs : null;
+
+  if (declared === null && remaining === null) return null;
+  const chosen = declared === null
+    ? remaining
+    : (remaining === null ? declared : Math.min(declared, remaining));
+  // Floor at 1ms: a budget that is already spent must fire immediately rather
+  // than schedule a timer in the past (setTimeout would fire it anyway, but a
+  // negative delay reads as a bug to whoever logs it next).
+  return Math.max(1, chosen);
+}
+
+/**
+ * Derive the signal the child actually runs under: the parent's abort
+ * (cancel from the UI, parent failure) OR our own deadline, whichever
+ * fires first.
+ *
+ * Hand-rolled rather than `AbortSignal.any()` because this package's
+ * `engines` is `>=18` and `AbortSignal.any` landed in 20.3 — a child that
+ * silently lost its parent-cancel wiring on an older runtime would be a
+ * worse bug than the one we're fixing.
+ *
+ * `timedOut()` is how the caller tells the two apart AFTER the run settles:
+ * parent-abort ⇒ `canceled`, our deadline ⇒ `timeout`.
+ */
+export function withChildDeadline(parentSignal, timeoutMs): {
+  signal: any; timedOut: () => boolean; dispose: () => void;
+} {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: any = null;
+
+  const onParentAbort = () => {
+    controller.abort((parentSignal as any)?.reason);
+  };
+
+  if (parentSignal) {
+    if (parentSignal.aborted) onParentAbort();
+    else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
+  if (timeoutMs !== null && timeoutMs !== undefined && !controller.signal.aborted) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('sub-graph deadline exceeded'));
+    }, timeoutMs);
+    // Never let the deadline timer itself hold the event loop open.
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    dispose() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    },
+  };
+}
+
+/**
  * ── Child env scoping (the child runs with its OWN row's env) ───────────────
  *
  * The begin endpoint returns the CHILD workflow row's decrypted `envSecret`
@@ -357,6 +487,13 @@ async function loadChildAgentClass(cacheDir) {
  *   The agent shell from the parent's run. Passed verbatim into the
  *   child's `graph.run(agent, ...)` so the child sees the same agent
  *   strategy + onComplete hooks; child workflows can override per-node.
+ * @param {number} [options.timeoutMs]
+ *   The DECLARED budget for this child, in ms — the same knob the HTTP
+ *   path uses to bound its poll loop. Here it bounds the child's own
+ *   run: at the deadline the child is ABORTED and finalized `timeout`,
+ *   and the dispatch rejects with `subgraphTimeoutError`. Clamped down to
+ *   the parent's remaining wall clock (resolveChildTimeoutMs). Omit for
+ *   "no deadline of its own" — `dispatchSubgraph` always supplies one.
  * @param {string | function} [options.output]
  *   Same shape as the HTTP path's `output:`. We don't resolve it here
  *   — the caller (`sub-graph-executor.js`) does that on the finalState
@@ -539,6 +676,12 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
   // We unwrap `runResult.state` so options.output and parent-state merge
   // semantics match the cold-start path exactly — otherwise `output:
   // 'someField'` returns undefined and downstream nodes break.
+  // The DECLARED budget, honoured. The child runs under a signal that fires
+  // on the parent's abort OR on `timeoutMs`, whichever comes first — see
+  // resolveChildTimeoutMs/withChildDeadline above for why both bounds exist.
+  const childTimeoutMs = resolveChildTimeoutMs(options.timeoutMs);
+  const deadline = withChildDeadline(options.signal, childTimeoutMs);
+
   let runResult;
   let finalState;
   try {
@@ -559,7 +702,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
           dispatchMode: 'inprocess',
         },
         () => childGraph.run(options.parentAgent, childInitialState, {
-          signal: options.signal,
+          signal: deadline.signal,
         }),
       );
     });
@@ -570,33 +713,46 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
       ? runResult.state
       : runResult;
   } catch (err) {
+    // A child that THREW because we aborted it is a timeout, not a crash —
+    // report it with the same shape the HTTP path uses so the parent's
+    // classification is path-independent.
+    const timedOut = deadline.timedOut();
     await callFinalize({
       apiBase: env.apiBase,
       authToken: env.authToken,
       payload: {
         childExecutionId,
-        status: 'failed',
-        error: { message: err.message, code: err.code || 'CHILD_THREW', stack: err.stack },
+        status: timedOut ? 'timeout' : 'failed',
+        error: timedOut
+          ? { message: `aborted at the declared ${Math.round(childTimeoutMs / 1000)}s sub-graph budget`, code: 'SUBGRAPH_TIMEOUT' }
+          : { message: err.message, code: err.code || 'CHILD_THREW', stack: err.stack },
         durationMs: Date.now() - startedAt,
       },
     });
-    throw err;
+    throw timedOut
+      ? subgraphTimeoutError(workflowName, childExecutionId, childTimeoutMs)
+      : err;
+  } finally {
+    deadline.dispose();
   }
 
   // The graph engine sets `stoppedExternally: true` on the *wrapper*
   // when aborted — we already unwrapped to `finalState=runResult.state`,
-  // so read the flag from the wrapper instead.
+  // so read the flag from the wrapper instead. WHO aborted decides the
+  // terminal status: our deadline ⇒ `timeout`, the parent ⇒ `canceled`.
   if (runResult && typeof runResult === 'object' && runResult.stoppedExternally) {
+    const timedOut = deadline.timedOut();
     await callFinalize({
       apiBase: env.apiBase,
       authToken: env.authToken,
       payload: {
         childExecutionId,
-        status: 'canceled',
+        status: timedOut ? 'timeout' : 'canceled',
         finalState,
         durationMs: Date.now() - startedAt,
       },
     });
+    if (timedOut) throw subgraphTimeoutError(workflowName, childExecutionId, childTimeoutMs);
     const e: any = new Error(`Sub-graph '${workflowName}' canceled by parent abort`);
     e.code = 'SUBGRAPH_CANCELED';
     e.subgraphJobId = childExecutionId;
