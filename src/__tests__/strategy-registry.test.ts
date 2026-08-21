@@ -326,9 +326,8 @@ describe('per-node model pin (the fifth executor read-site)', () => {
     })).toBe('opus-4.7');
   });
 
-  it("'auto'/empty pins fall through to the run-level chain", async () => {
+  it('empty pins fall through to the run-level chain', async () => {
     const { resolveInvocationModel } = await import('../strategy-registry');
-    expect(resolveInvocationModel({ nodeConfigModel: 'auto', envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
     expect(resolveInvocationModel({ nodeConfigModel: '  ', envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
     expect(resolveInvocationModel({ envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
   });

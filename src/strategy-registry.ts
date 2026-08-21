@@ -85,7 +85,7 @@ export function listStrategies() {
  */
 export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel, nodeConfigModel }: any = {}) {
   const modelsConfig = config.models || {};
-  const pinnedModel = (typeof nodeConfigModel === 'string' && nodeConfigModel.trim() && nodeConfigModel.trim() !== 'auto')
+  const pinnedModel = (typeof nodeConfigModel === 'string' && nodeConfigModel.trim())
     ? nodeConfigModel.trim() : null;
   const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
   const globalModel = modelsConfig.default || null;
