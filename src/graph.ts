@@ -1497,6 +1497,16 @@ export class WorkflowGraph {
           // here, but the engine's abort lifecycle is the single source of
           // truth. Strategies read this in slice 3 to plumb into spawn().
           signal: internalAbortController.signal,
+          // …and on WHICH NODE THIS IS, for the same reason. A prompt node gets
+          // `nodeName` from node.ts; a CUSTOM-EXECUTE node reaching the model
+          // through this wrapper got nothing, so every skill that resolves
+          // per-node (browser's per-node session dir, artifact's provenance
+          // stamp) saw the field simply absent on that one path. `currentNode`
+          // is the graph node KEY and is already in scope here — the same value
+          // node.ts passes and the same value `nodeContext.nodeId` carries.
+          // AFTER the spread deliberately: the node it is running in is the
+          // engine's fact, not an option a caller may restate.
+          nodeName: currentNode,
         });
       };
 
