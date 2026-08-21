@@ -89,9 +89,16 @@ export class SubgraphFallback extends Error {
  * board-runner lane does) behaves differently depending on a routing decision
  * it never made. Two places that must agree ⇒ one constructor.
  */
-export function subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus = 'timeout') {
+export function subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus = 'timeout', lastTransportError: string | null = null) {
+  // `lastTransportError` is the HTTP path's only extra: when the poller spent
+  // the budget unable to REACH the API, a bare "timed out (last status:
+  // accepted)" sends the reader hunting for a slow child that was never the
+  // problem. Naming the transport failure costs one clause and points at the
+  // actual fault. Absent ⇒ the message is byte-identical to before, which is
+  // what keeps the two paths' shape the same.
   const e: any = new Error(
-    `Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`,
+    `Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`
+    + (lastTransportError ? `; the status API was unreachable on the last attempt (${lastTransportError})` : ''),
   );
   // `.code` is NEW on the HTTP path (it had message + jobId + status only) and
   // purely additive — it gives a fleet a stable discriminator that does not
@@ -101,6 +108,7 @@ export function subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus 
   e.code = 'SUBGRAPH_TIMEOUT';
   e.subgraphJobId = jobId;
   e.subgraphStatus = lastStatus;
+  if (lastTransportError) e.subgraphTransportError = lastTransportError;
   return e;
 }
 
