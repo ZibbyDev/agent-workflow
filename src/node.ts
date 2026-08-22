@@ -232,7 +232,14 @@ export class Node {
         }
 
         if (this.isZodSchema && extractedJson) {
-          logger.info(`[workflow] node '${this.name}': output validated: ${JSON.stringify(extractedJson, null, 2)}`);
+          // debug, NOT info: this dumps the node's ENTIRE validated output as
+          // pretty JSON. The CLI host now routes info → console.log, which the
+          // per-node progress middleware captures into `nodes[].logs` and
+          // re-ships the WHOLE buffer on every 500ms flush — so at info this
+          // pays for a large blob repeatedly, to duplicate content the agent
+          // already streamed on stdout and that is also written to
+          // <sessionPath>/<node>/raw_stream_output.txt and the artifact.
+          logger.debug(`[workflow] node '${this.name}': output validated: ${JSON.stringify(extractedJson, null, 2)}`);
 
           let finalOutput = extractedJson;
           if (typeof this.onComplete === 'function') {
@@ -257,7 +264,8 @@ export class Node {
 
         if (this.parser) {
           const parsed = this.parser.parse(rawOutput);
-          logger.info(`[workflow] node '${this.name}': parsed output: ${JSON.stringify(parsed, null, 2)}`);
+          // debug, NOT info — same reason as the validated-output dump above.
+          logger.debug(`[workflow] node '${this.name}': parsed output: ${JSON.stringify(parsed, null, 2)}`);
           timeline.step('Output parsed');
           return { success: true, output: parsed, raw: rawOutput };
         }
