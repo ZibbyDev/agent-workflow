@@ -308,13 +308,33 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
 
   let lastStatus = 'accepted';
   let pollCount = 0;
+  // A poll that cannot REACH the API is not an answer about the child — the
+  // child is still running, and the only honest reading is "unknown, ask
+  // again". This used to be fatal: `fetch` rejecting (undici's bare
+  // `TypeError: fetch failed` — DNS blip, connection reset, the control plane
+  // restarting) escaped the loop and rejected the whole dispatch, while the
+  // 5xx branch below carefully retried the SAME condition reported a
+  // different way. One board-runner tick lost three 40-minute children to a
+  // single blip 23 minutes in (2026-08-21): all three parents gave up in the
+  // same second, the children kept running as orphans nothing cancels, and
+  // the tickets were written back failed for a retry that would duplicate the
+  // work. So a transport failure is retried exactly like a 5xx, leaving the
+  // caller's `timeoutMs` as the ONE thing that ends the wait.
+  let lastTransportError: string | null = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollIntervalMs));
     pollCount += 1;
 
-    const statusResp = await fetch(statusUrl, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
+    let statusResp: Response;
+    try {
+      statusResp = await fetch(statusUrl, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+    } catch (e: any) {
+      lastTransportError = e?.message || String(e);
+      logger.warn(`[sub-graph] status poll for ${jobId} could not reach the API (${lastTransportError}), will retry`);
+      continue;
+    }
     if (!statusResp.ok) {
       // Transient errors are common during ECS boot — log and keep polling.
       if (statusResp.status >= 500) {
@@ -323,7 +343,16 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       }
       throw new Error(`Sub-graph status poll failed for ${jobId}: ${statusResp.status}`);
     }
-    const statusJson: any = await statusResp.json();
+    let statusJson: any;
+    try {
+      statusJson = await statusResp.json();
+    } catch (e: any) {
+      // A truncated/half-read body is the same class: no answer about the
+      // child, so ask again rather than give up.
+      lastTransportError = e?.message || String(e);
+      logger.warn(`[sub-graph] status poll for ${jobId} returned an unreadable body (${lastTransportError}), will retry`);
+      continue;
+    }
     const exec = statusJson?.data || statusJson?.execution || statusJson;
     lastStatus = exec?.status || lastStatus;
 
@@ -344,8 +373,15 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // Timed out without reaching terminal — cancel the child? For v1 we
   // just throw so the parent's error path runs; manual cleanup via the
   // activity tab. Orphan-reaper Lambda (future) handles long-term cleanup.
-  const e: any = new Error(`Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`);
+  // When the budget was spent unable to REACH the API, a bare "timed out
+  // (last status: accepted)" sends the reader hunting for a slow child that
+  // was never the problem — name the transport failure instead.
+  const e: any = new Error(
+    `Sub-graph '${workflowName}' (${jobId}) timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${lastStatus})`
+    + (lastTransportError ? `; the status API was unreachable on the last attempt (${lastTransportError})` : ''),
+  );
   e.subgraphJobId = jobId;
   e.subgraphStatus = lastStatus;
+  if (lastTransportError) e.subgraphTransportError = lastTransportError;
   throw e;
 }
