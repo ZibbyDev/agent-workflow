@@ -617,11 +617,40 @@ export class WorkflowGraph {
       if (typeof node.customExecute === 'function') {
         config.executeCode = node.customExecute.toString();
       }
-      // Sub-graph dispatch (parent-child): the CHILD workflow slug this node
+      // Sub-graph dispatch (parent-child): the CHILD workflow slug(s) this node
       // runs. Display-only metadata so the graph viewer can badge the node as a
       // sub-workflow + name its child (the dispatch itself is inside executeCode).
-      if (typeof node?.config?.dispatchesWorkflow === 'string' && node.config.dispatchesWorkflow.trim()) {
-        config.dispatchesWorkflow = node.config.dispatchesWorkflow.trim();
+      //
+      // A STRING or an ARRAY OF STRINGS. One node = one child was the shape a
+      // declarative `{ workflow: 'slug' }` node produces, and it is still what
+      // that path emits verbatim. But a node whose `execute` fans out over a
+      // DECLARED ROSTER (board-runner's `dispatch`: one node, N members,
+      // `Promise.allSettled` over `dispatchSubgraph(m, { async: true })`)
+      // dispatches several children from one place, and the one-string marker
+      // could only name one of them — so the deploy cascade installed one
+      // member and every other member's dispatch 404'd at run time. The array
+      // is the honest declaration of that shape.
+      //
+      // ZERO runtime effect either way: the runtime never reads this field (see
+      // the `dispatchesWorkflow` note ~line 344 — "Purely descriptive; the
+      // runtime ignores it"). Its consumers are the derivations that turn it
+      // into a roster: `deriveComposedOf` (workflow-composition.js) and the
+      // marketplace sync's `childSlugs` — both flatten an array. A string stays
+      // a string on the wire, so every existing graph serializes byte-identically.
+      const dw = node?.config?.dispatchesWorkflow;
+      if (typeof dw === 'string' && dw.trim()) {
+        config.dispatchesWorkflow = dw.trim();
+      } else if (Array.isArray(dw)) {
+        // Normalize here, ONCE, so no reader has to: strings only, trimmed,
+        // de-duped, declaration order preserved. An array that normalizes to
+        // nothing emits no key at all (same as an absent marker) rather than an
+        // empty array a consumer might read as "declares a member".
+        const slugs = [...new Set(
+          dw.filter((s: unknown): s is string => typeof s === 'string')
+            .map((s) => s.trim())
+            .filter(Boolean),
+        )];
+        if (slugs.length) config.dispatchesWorkflow = slugs;
       }
       // Per-node VENDOR PIN declared on the node config
       // (`graph.addNode(n, { ...node, agent: 'claude' })`). The RUNTIME already
