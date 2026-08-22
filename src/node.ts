@@ -71,30 +71,53 @@ export class Node {
 
     if (typeof this.customExecute === 'function') {
       logger.debug(`[workflow] node '${this.name}': custom execute (skipping LLM)`);
-      try {
-        const result = await this.customExecute(context);
+      // THE retry loop for custom-code nodes — same shape, same semantics as
+      // the LLM path's loop below: `retries: N` means N RETRIES, i.e. N+1
+      // total attempts (`attempt <= this.retries`).
+      //
+      // This loop used to not exist: the custom path returned on the FIRST
+      // failure, and `retries` was honoured only by a second gate in
+      // graph.ts — which never re-executed anything (it `continue`d the
+      // scheduler loop, popping the NEXT ready node) and swallowed the
+      // failure into `success: true`. So `retries` was a silent no-op for
+      // every custom-code node, and — because graph.addNode() compiles a
+      // `{ workflow: 'child' }` sub-graph node into a custom-execute node —
+      // for every sub-graph dispatch too, which is exactly the case
+      // addNode()'s own comment advertises as "LangGraph-style RetryPolicy
+      // for free". One layer now, and it is this one.
+      //
+      // Both failure SHAPES retry, because both are what the deleted gate
+      // reacted to (`result.success === false`): a throw, and a returned
+      // `{ success: false }`.
+      let lastFailure: any = null;
+      for (let attempt = 0; attempt <= this.retries; attempt++) {
+        try {
+          const result = await this.customExecute(context);
 
-        if (typeof result === 'object' && result !== null && result.success === false) {
-          return { success: false, error: result.error || 'Node execution failed', raw: result.raw || null };
+          if (typeof result === 'object' && result !== null && result.success === false) {
+            lastFailure = { success: false, error: result.error || 'Node execution failed', raw: result.raw || null };
+          } else if (this.isZodSchema) {
+            logger.debug(`[workflow] node '${this.name}': validating output schema`);
+            const validated = this.outputSchema.parse(result);
+            return { success: true, output: validated, raw: null };
+          } else {
+            return { success: true, output: result, raw: null };
+          }
+        } catch (error) {
+          logger.error(`[workflow] node '${this.name}' failed: ${error.message}`);
+          if (error.name === 'ZodError') {
+            // Zod v3+ exposes .issues; older majors used .errors. Defensive
+            // fallback so a downstream user pinned to an older Zod still
+            // gets a real log line, not `undefined`.
+            logger.error(`Schema errors: ${JSON.stringify(error.issues || error.errors, null, 2)}`);
+          }
+          lastFailure = { success: false, error: error.message, raw: null };
         }
-
-        if (this.isZodSchema) {
-          logger.debug(`[workflow] node '${this.name}': validating output schema`);
-          const validated = this.outputSchema.parse(result);
-          return { success: true, output: validated, raw: null };
+        if (attempt < this.retries) {
+          logger.info(`[workflow] node '${this.name}' failed, retrying (${attempt + 1}/${this.retries})…`);
         }
-
-        return { success: true, output: result, raw: null };
-      } catch (error) {
-        logger.error(`[workflow] node '${this.name}' failed: ${error.message}`);
-        if (error.name === 'ZodError') {
-          // Zod v3+ exposes .issues; older majors used .errors. Defensive
-          // fallback so a downstream user pinned to an older Zod still
-          // gets a real log line, not `undefined`.
-          logger.error(`Schema errors: ${JSON.stringify(error.issues || error.errors, null, 2)}`);
-        }
-        return { success: false, error: error.message, raw: null };
       }
+      return lastFailure;
     }
 
     // Prompt sources (both supported):

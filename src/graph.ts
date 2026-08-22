@@ -1586,21 +1586,26 @@ export class WorkflowGraph {
 
           state.append('errors', { node: currentNode, error: result.error });
 
-          const maxRetries = node.config?.retries || 0;
-          const retryKey = `${currentNode}_retries`;
-          const currentRetries = state.getAll()[retryKey] || 0;
-
-          if (currentRetries < maxRetries) {
-            timeline.stepInfo(`Retrying (attempt ${currentRetries + 1}/${maxRetries})`);
-            state.update({
-              [retryKey]: currentRetries + 1,
-              [`${currentNode}_raw`]: result.raw,
-            });
-            continue;
-          }
-
+          // A node that reports failure ENDS THE RUN, loudly. Retrying is
+          // Node.execute()'s job — it loops `attempt <= this.retries`, so
+          // `retries: N` is N retries / N+1 attempts — and by the time a
+          // `success: false` reaches this line they are already exhausted.
+          //
+          // A SECOND retry gate used to live right here, and it was the most
+          // dangerous bug in the engine. It did:
+          //     if (currentRetries < maxRetries) { …bump a counter…; continue; }
+          // and `continue` does not re-run this node — it pops the NEXT ready
+          // node off the scheduler stack. The failed node was never re-queued,
+          // so nothing re-executed it, nothing scheduled its successors, the
+          // loop drained, and `graph.run()` returned `success: true`. Measured
+          // on 0.6.9: a node declaring `retries: 3` executed ONCE, its
+          // successor never ran, and a failed run was reported as a successful
+          // one — the failure visible only as an `executionLog` entry nobody
+          // reads. Two retry deciders that can disagree IS the bug; there is
+          // one decider now, and it is Node.execute().
+          const attempts = (node.config?.retries || 0) + 1;
           timeline.nodeFailed(currentNode, result.error, { duration });
-          throw new Error(`Node '${currentNode}' failed after ${currentRetries} attempts: ${result.error}`);
+          throw new Error(`Node '${currentNode}' failed after ${attempts} attempt(s): ${result.error}`);
         }
 
         state.update({ [currentNode]: result.output });
