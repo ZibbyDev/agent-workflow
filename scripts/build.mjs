@@ -8,9 +8,18 @@
  */
 import { build } from 'esbuild';
 import { readdir, rm, mkdir } from 'fs/promises';
-import { join, extname } from 'path';
+import { join, extname, isAbsolute } from 'path';
 
 const cwd = process.cwd();
+
+// Where to emit. Defaults to `<cwd>/dist` — the ONLY value any build script,
+// Dockerfile or publish path uses. The override exists so a test can build the
+// real artifacts into a throwaway directory and assert on them without
+// racing (or destroying, note the rm -rf below) the shared dist/ that other
+// sessions in this tree may be running against. Brand-neutral by rule.
+const outDir = process.env.DIST_OUT
+  ? (isAbsolute(process.env.DIST_OUT) ? process.env.DIST_OUT : join(cwd, process.env.DIST_OUT))
+  : join(cwd, 'dist');
 
 async function collectSourceFiles(dir) {
   const entries = [];
@@ -34,8 +43,8 @@ async function collectSourceFiles(dir) {
   return entries;
 }
 
-await rm(join(cwd, 'dist'), { recursive: true, force: true });
-await mkdir(join(cwd, 'dist'), { recursive: true });
+await rm(outDir, { recursive: true, force: true });
+await mkdir(outDir, { recursive: true });
 
 const entryPoints = await collectSourceFiles(join(cwd, 'src'));
 if (entryPoints.length === 0) {
@@ -45,7 +54,7 @@ if (entryPoints.length === 0) {
 
 await build({
   entryPoints,
-  outdir: join(cwd, 'dist'),
+  outdir: outDir,
   outbase: join(cwd, 'src'),
   format: 'esm',
   platform: 'node',
@@ -76,4 +85,4 @@ await build({
   ],
 });
 
-console.log(`Built ${entryPoints.length} files → dist/ (esm, minified)`);
+console.log(`Built ${entryPoints.length} files → ${outDir} (esm, minified)`);
