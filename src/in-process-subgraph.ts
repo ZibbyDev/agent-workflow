@@ -49,6 +49,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger } from './logger.js';
 import { runInContext, getExecContext } from './exec-context.js';
 import * as registry from './subgraph-registry.js';
+// The engine's HTTP deadlines live in ONE declaration — see fetch-deadline.ts
+// for why they are not re-derived next to each call site.
+import {
+  SUBGRAPH_TRIGGER_TIMEOUT_MS,
+  SUBGRAPH_BUNDLE_TIMEOUT_MS,
+  SUBGRAPH_CONNECT_TIMEOUT_MS,
+  timeoutMsFrom,
+  deadlineFor,
+  isTimeoutError,
+} from './fetch-deadline.js';
 
 /** Default cache root — overridable via env for tests / non-standard runtimes. */
 const CACHE_ROOT = process.env.ZIBBY_SUBGRAPH_CACHE_DIR || '/tmp/zibby/subgraphs';
@@ -327,18 +337,45 @@ function readDispatchEnv() {
  * version that doesn't expose the endpoint yet).
  */
 async function callBegin({ apiBase, authToken, body }: any) {
+  // BOUNDED, and it matters MORE here than on the HTTP path it falls back to:
+  // in-process is the DEFAULT for a sync dispatch, so this call runs FIRST. An
+  // unbounded hang here never reaches the HTTP trigger at all, and bounding
+  // only the fallback would have been a fix nothing could get to. Same budget
+  // as that trigger — the two are the same question asked of the same control
+  // plane (see fetch-deadline.ts).
+  const dl = deadlineFor('SUBGRAPH_TRIGGER_TIMEOUT_MS', SUBGRAPH_TRIGGER_TIMEOUT_MS);
   let resp;
   try {
     resp = await fetch(`${apiBase}/internal/subgraph/begin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(body),
+      signal: dl.signal,
     });
   } catch (netErr) {
-    throw new SubgraphFallback('network', `begin fetch failed: ${netErr.message}`);
+    // A timeout lands in the SAME fail-soft outcome a transport error always
+    // did — `SubgraphFallback` means "in-process could not start, use HTTP" —
+    // because that is exactly what a control plane too slow to answer means
+    // here. Only the TEXT differs, so the run log can tell a slow begin from a
+    // broken one; the non-timeout wording is byte-for-byte as before.
+    throw new SubgraphFallback(
+      isTimeoutError(netErr) ? 'begin-timeout' : 'network',
+      isTimeoutError(netErr) ? `begin TIMED OUT ${dl.label}` : `begin fetch failed: ${netErr.message}`,
+    );
   }
+  // The body read rides the SAME signal — headers-then-stall is the same hang.
+  // The existing swallow stays for a non-JSON 5xx (which the status handling
+  // below is written for), but an ABORTED read is NOT that: on a 200 it would
+  // leave `json` null, and the caller destructures this return value, so a
+  // swallowed abort would surface as a TypeError on `bundlePresignedUrl`
+  // instead of the fallback the whole in-process path is built around.
   let json = null;
-  try { json = await resp.json(); } catch { /* non-JSON 5xx is fine */ }
+  try {
+    json = await resp.json();
+  } catch (bodyErr) {
+    if (isTimeoutError(bodyErr)) throw new SubgraphFallback('begin-timeout', `begin body read TIMED OUT ${dl.label}`);
+    /* non-JSON 5xx is fine — the status handling below covers it */
+  }
   if (!resp.ok) {
     if (resp.status === 404) {
       const e: any = new Error(`Sub-graph child '${body.childWorkflowType}' not found in project`);
@@ -375,17 +412,27 @@ async function callBegin({ apiBase, authToken, body }: any) {
  *  has already run, we don't want to mask its return value with a backend
  *  hiccup on the closeout call. */
 async function callFinalize({ apiBase, authToken, payload }: any) {
+  // "Best-effort" was exactly the reasoning that left this unbounded, and it is
+  // the wrong reasoning: a call whose RESULT nobody needs still blocks the
+  // parent while it waits for one. The child has already finished by the time
+  // we get here, so a hang costs the parent the whole remainder of its budget
+  // for a closeout nobody reads. Same provisioning-class budget as `begin`.
+  const dl = deadlineFor('SUBGRAPH_TRIGGER_TIMEOUT_MS', SUBGRAPH_TRIGGER_TIMEOUT_MS);
   try {
     const resp = await fetch(`${apiBase}/internal/subgraph/finalize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(payload),
+      signal: dl.signal,
     });
     if (!resp.ok) {
       logger.warn(`[in-process subgraph] finalize returned ${resp.status} for ${payload.childExecutionId}`);
     }
   } catch (err) {
-    logger.warn(`[in-process subgraph] finalize failed: ${err.message}`);
+    // Still swallowed — the child's return value must never be masked by a
+    // closeout hiccup. Only the wording is new, so a run log can tell a slow
+    // control plane from a broken one.
+    logger.warn(`[in-process subgraph] finalize ${isTimeoutError(err) ? `TIMED OUT ${dl.label}` : `failed: ${err.message}`}`);
   }
 }
 
@@ -426,7 +473,28 @@ async function ensureBundleExtracted(bundleUrl, cacheDir) {
 
   try {
     await new Promise<void>((resolveProc, rejectProc) => {
-      const curl = spawn('curl', ['-fsSL', bundleUrl], { stdio: ['ignore', 'pipe', 'inherit'] });
+      // ⚠️ SAME BUG CLASS, DIFFERENT TRANSPORT. `curl` with no `--max-time`
+      // waits forever on a stalled presigned URL exactly the way a bare
+      // `fetch` does, and this one is worse in one respect: the parent is
+      // blocked on a CHILD PROCESS, so not even an AbortSignal elsewhere could
+      // reach it. The two budgets are split because a DNS/TCP handshake that
+      // never completes and a large bundle downloading slowly deserve
+      // different patience — `--connect-timeout` covers the first,
+      // `--max-time` caps the whole transfer. A blown budget exits non-zero,
+      // which the existing `curl exited <n>` branch already turns into a
+      // `SubgraphFallback` → the HTTP dispatch path. Fail-soft, unchanged.
+      //
+      // NOTE the sibling-waiter above spins for a FIXED 30s while an owner may
+      // legitimately spend the full bundle budget. That is NOT a pair that must
+      // agree: the loser's give-up is itself a `SubgraphFallback` to HTTP, so
+      // the worst case is a redundant cold start, never a lost dispatch.
+      const connectS = Math.ceil(SUBGRAPH_CONNECT_TIMEOUT_MS / 1000);
+      const maxS = Math.ceil(timeoutMsFrom('SUBGRAPH_BUNDLE_TIMEOUT_MS', SUBGRAPH_BUNDLE_TIMEOUT_MS) / 1000);
+      const curl = spawn(
+        'curl',
+        ['-fsSL', '--connect-timeout', String(connectS), '--max-time', String(maxS), bundleUrl],
+        { stdio: ['ignore', 'pipe', 'inherit'] },
+      );
       const tar = spawn('tar', ['-xzf', '-', '-C', cacheDir], { stdio: ['pipe', 'inherit', 'inherit'] });
       curl.stdout.pipe(tar.stdin);
       let curlExit, tarExit;

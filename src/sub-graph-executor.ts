@@ -42,6 +42,65 @@ const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled', 'timeout']);
 
+/* ── FETCH BUDGETS ──────────────────────────────────────────────────────────
+ * The numbers and the helpers live in ONE place — `./fetch-deadline.js` — and
+ * that file carries the full reasoning for each budget. What is worth saying
+ * HERE is what this file's two calls specifically lose when one gives up.
+ *
+ * WHY THEY ARE BOUNDED AT ALL. Node's global fetch has NO default timeout, and
+ * A HANG IS NOT A THROW. Both call sites are already written for failure — the
+ * trigger's rejection is booked per-child by the caller's `Promise.allSettled`,
+ * and the poll loop deliberately RETRIES a transport throw — and neither of
+ * those paths can fire for a connection that is accepted and then never
+ * answered. The poller's case is the sharp one, and it is worth stating
+ * plainly: `while (Date.now() < deadline)` LOOKS like a bound and is not. The
+ * clock is only consulted BETWEEN iterations, so a single `fetch` that never
+ * settles parks the loop inside one iteration forever and `timeoutMs` — the
+ * caller's whole contract, the thing `SUBGRAPH_TIMEOUT` is named after — is
+ * never read again. A per-request budget is what makes the EXISTING overall
+ * deadline real.
+ *
+ * FRESH PER DISPATCH for the trigger, and here that is free rather than merely
+ * acceptable: the fan-out this exists for (`go.map((g) =>
+ * dispatchSubgraph(g.worker, {async:true}))` under `Promise.allSettled`, every
+ * fleet dispatch node) fires N of these IN PARALLEL, so N fresh deadlines cost
+ * ONE budget of wall clock, not N. Sharing one would buy nothing except the
+ * ability for the first slow trigger to book every remaining ticket as failed —
+ * an outcome the caller WRITES DOWN, onto the customer's board.
+ *
+ * FRESH PER POLL, clamped to the caller's remaining wall clock — see
+ * `pollDeadline` below, which is the enforcement half of the TWO-PLACES note in
+ * fetch-deadline.ts. */
+import {
+  SUBGRAPH_TRIGGER_TIMEOUT_MS,
+  SUBGRAPH_POLL_TIMEOUT_MS,
+  timeoutMsFrom,
+  makeDeadline,
+  deadlineFor,
+  isTimeoutError,
+} from './fetch-deadline.js';
+
+// Re-exported so a consumer can read the engine's budgets from the module that
+// uses them without knowing where they are declared. ONE declaration, N
+// consumers — never a second copy of the number.
+export { SUBGRAPH_TRIGGER_TIMEOUT_MS, SUBGRAPH_POLL_TIMEOUT_MS };
+
+const triggerDeadline = () => deadlineFor('SUBGRAPH_TRIGGER_TIMEOUT_MS', SUBGRAPH_TRIGGER_TIMEOUT_MS);
+
+/**
+ * The poll deadline, CLAMPED to the wall clock the caller actually has left.
+ * This is the enforcement half of the TWO-PLACES pair: whatever
+ * `SUBGRAPH_POLL_TIMEOUT_MS` says, a poll may never outlive `deadlineAt`, so
+ * raising the knob past `timeoutMs` cannot make the loop overshoot — it just
+ * stops mattering. `Math.max(1, …)` because `AbortSignal.timeout(0)` fires on
+ * the next tick and would read as a poll that was never attempted.
+ */
+function pollDeadline(deadlineAt: number) {
+  const budget = timeoutMsFrom('SUBGRAPH_POLL_TIMEOUT_MS', SUBGRAPH_POLL_TIMEOUT_MS);
+  const ms = Math.max(1, Math.min(budget, deadlineAt - Date.now()));
+  return makeDeadline(ms, 'SUBGRAPH_POLL_TIMEOUT_MS');
+}
+
 function getApiBase() {
   const progress = process.env.PROGRESS_API_URL;
   if (!progress) {
@@ -246,14 +305,35 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
 
   logger.info(`[sub-graph] dispatching '${workflowName}' (${options.async ? 'async' : 'sync'}) from parent ${parentExecutionId || '<none>'}`);
 
-  const triggerResp = await fetch(triggerUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${authToken}`,
-    },
-    body: JSON.stringify(body),
-  });
+  // A FRESH deadline for THIS dispatch — see the budget note up top for why a
+  // parallel fan-out must not share one.
+  const triggerDl = triggerDeadline();
+  let triggerResp: Response;
+  try {
+    triggerResp = await fetch(triggerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(body),
+      signal: triggerDl.signal,
+    });
+  } catch (err: any) {
+    // A NON-timeout error is rethrown UNCHANGED — the same object, the same
+    // message (undici's bare `TypeError: fetch failed`), the same `.status` —
+    // so every existing caller branch is byte-for-byte as it is today.
+    if (!isTimeoutError(err)) throw err;
+    const e: any = new Error(
+      `Sub-graph '${workflowName}' trigger TIMED OUT ${triggerDl.label} — the platform never answered, `
+      + 'so no child was dispatched and nothing needs reconciling.',
+    );
+    e.code = 'SUBGRAPH_TRIGGER_TIMEOUT';
+    e.subgraph = workflowName;
+    e.timedOut = true;
+    e.cause = err;
+    throw e;
+  }
 
   if (!triggerResp.ok) {
     let errJson = null;
@@ -307,7 +387,25 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     throw e;
   }
 
-  const triggerJson: any = await triggerResp.json();
+  // The body read rides the SAME signal — headers that arrive and a body that
+  // then stalls is the same hang, and bounding only the first half would have
+  // left the door open. (The `!ok` branch above already reads its body inside a
+  // try/catch, on this same signal.)
+  let triggerJson: any;
+  try {
+    triggerJson = await triggerResp.json();
+  } catch (err: any) {
+    if (!isTimeoutError(err)) throw err;
+    const e: any = new Error(
+      `Sub-graph '${workflowName}' trigger body read TIMED OUT ${triggerDl.label} — the platform accepted the `
+      + 'dispatch but never finished answering, so its jobId is unknown and nothing can reconcile it.',
+    );
+    e.code = 'SUBGRAPH_TRIGGER_TIMEOUT';
+    e.subgraph = workflowName;
+    e.timedOut = true;
+    e.cause = err;
+    throw e;
+  }
   const jobId = triggerJson?.data?.jobId || triggerJson?.jobId;
 
   if (!jobId) {
@@ -349,13 +447,24 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     await new Promise((r) => setTimeout(r, pollIntervalMs));
     pollCount += 1;
 
+    // A per-poll deadline, clamped to the time `deadline` has left. Without it
+    // the `while (Date.now() < deadline)` above is decorative: the clock is only
+    // read BETWEEN iterations, so one fetch that never settles parks the loop
+    // inside a single iteration and `timeoutMs` is never consulted again.
+    const pollDl = pollDeadline(deadline);
     let statusResp: Response;
     try {
       statusResp = await fetch(statusUrl, {
         headers: { Authorization: `Bearer ${authToken}` },
+        signal: pollDl.signal,
       });
     } catch (e: any) {
-      lastTransportError = e?.message || String(e);
+      // A timeout is the same class as a transport throw and takes the same
+      // branch — no answer about the child means ASK AGAIN, and the loop's own
+      // deadline stays the ONE thing that ends the wait. Only the remembered
+      // text differs, so a wait that really does end says whether the API was
+      // unreachable or merely too slow.
+      lastTransportError = isTimeoutError(e) ? `poll TIMED OUT ${pollDl.label}` : (e?.message || String(e));
       logger.warn(`[sub-graph] status poll for ${jobId} could not reach the API (${lastTransportError}), will retry`);
       continue;
     }
@@ -372,8 +481,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       statusJson = await statusResp.json();
     } catch (e: any) {
       // A truncated/half-read body is the same class as the throw above:
-      // no answer about the child, so ask again rather than give up.
-      lastTransportError = e?.message || String(e);
+      // no answer about the child, so ask again rather than give up. The read
+      // rides the SAME signal as its request, so a body that stalls after the
+      // headers lands here on the poll budget instead of hanging the loop.
+      lastTransportError = isTimeoutError(e) ? `poll body read TIMED OUT ${pollDl.label}` : (e?.message || String(e));
       logger.warn(`[sub-graph] status poll for ${jobId} returned an unreadable body (${lastTransportError}), will retry`);
       continue;
     }
