@@ -89,13 +89,35 @@ export class Node {
       // Both failure SHAPES retry, because both are what the deleted gate
       // reacted to (`result.success === false`): a throw, and a returned
       // `{ success: false }`.
+      //
+      // ⚠️ `success` IS THEREFORE RESERVED on a custom-code node's return, and
+      // that collides with the very natural urge to ALSO use it as a domain
+      // fact ("did this node produce a change?"). When it does, the node dies
+      // on a perfectly good outcome and — because the old fallback message here
+      // was the bare literal `'Node execution failed'` — it dies with no
+      // diagnostic at all: no state written, no downstream node run, nothing to
+      // read but the node's name. That shipped in `developer`'s `fix_code`,
+      // whose "the model correctly changed nothing" branch returned
+      // `{ success: false }` and killed the run (verified on a live box,
+      // 2026-08-25). So the fallback below NAMES the collision instead of
+      // describing nothing: the next node that trips it says why in its own
+      // error line. (The LLM path has no such trap — a structured output
+      // carrying `success:false` is returned as OUTPUT, never read as failure.)
       let lastFailure: any = null;
       for (let attempt = 0; attempt <= this.retries; attempt++) {
         try {
           const result = await this.customExecute(context);
 
           if (typeof result === 'object' && result !== null && result.success === false) {
-            lastFailure = { success: false, error: result.error || 'Node execution failed', raw: result.raw || null };
+            lastFailure = {
+              success: false,
+              error: result.error
+                || `node '${this.name}' returned { success: false } with no \`error\` field. On a custom-code `
+                  + 'node `success` is RESERVED: the engine reads it as "this node failed" and stops the graph. '
+                  + 'If it was meant as a DOMAIN fact (no diff to commit, a PR deliberately skipped), give that '
+                  + 'fact its own field name and return the outcome — or set `error` to say what actually failed.',
+              raw: result.raw || null,
+            };
           } else if (this.isZodSchema) {
             logger.debug(`[workflow] node '${this.name}': validating output schema`);
             const validated = this.outputSchema.parse(result);
