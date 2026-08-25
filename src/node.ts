@@ -9,6 +9,58 @@ import { join, dirname } from 'node:path';
 import { logger } from './logger.js';
 import { timeline } from './timeline.js';
 import { SESSION_INFO_FILE } from './constants.js';
+import { createAttemptBudget, type AttemptDecision } from './failure-class.js';
+
+/**
+ * ONE place decides what a retry PRINTS and how long it waits — both of the
+ * loops below call it, so the two paths can never describe the same policy
+ * differently. Returns false when the budget is spent (the loop then returns
+ * the last failure, exactly as it always did).
+ *
+ * The wording is deliberate on two counts:
+ *   • it says WHICH CLASS the failure was judged to be, because a wrong verdict
+ *     is the only way this feature can cost money and the log line is where a
+ *     human catches it;
+ *   • it says the workspace survives. On a transient retry the node re-runs in
+ *     the SAME container, so every file the agent already wrote is still there —
+ *     which is the difference between "redo the work" and "lose the work", and
+ *     nobody reading the log should have to guess which one happened.
+ */
+async function awaitRetry(
+  nodeName: string,
+  decision: AttemptDecision,
+  failure: unknown,
+  aborted: () => boolean,
+): Promise<boolean> {
+  if (!decision.retry) return false;
+  // A stopped run never retries, however the failure was classified.
+  if (aborted()) {
+    logger.info(`[workflow] node '${nodeName}': run aborted — not retrying`);
+    return false;
+  }
+  const why = (failure as any)?.message ?? String(failure ?? '');
+  if (decision.paidBy === 'transient') {
+    logger.warn(
+      `[workflow] node '${nodeName}': TRANSIENT provider failure — ${why}. `
+      + `Retrying in ${Math.round(decision.delayMs / 1000)}s `
+      + `(transient retry ${decision.index}/${decision.of}; the workspace is untouched, `
+      + 'so files this node already wrote survive into the retry).',
+    );
+  } else {
+    logger.info(
+      `[workflow] node '${nodeName}' failed (${decision.failureClass}), `
+      + `retrying (${decision.index}/${decision.of})…`,
+    );
+  }
+  if (decision.delayMs > 0) {
+    await new Promise((r) => setTimeout(r, decision.delayMs));
+    if (aborted()) {
+      logger.info(`[workflow] node '${nodeName}': run aborted during backoff — not retrying`);
+      return false;
+    }
+  }
+  return true;
+}
 
 // Common Handlebars helpers for declarative string prompts (idempotent, shared
 // across every prompt-render path since Handlebars is a singleton):
@@ -69,6 +121,12 @@ export class Node {
     const _getState = (key) =>
       state && typeof state.get === 'function' ? state.get(key) : context?.[key];
 
+    // The engine publishes its abort signal on state as `_signal` (graph.ts).
+    // Read it through the same accessor every other state read uses, so a node
+    // executed without a WorkflowState (unit tests, `zibby test`) is simply
+    // never "aborted" rather than throwing.
+    const _aborted = () => _getState('_signal')?.aborted === true;
+
     if (typeof this.customExecute === 'function') {
       logger.debug(`[workflow] node '${this.name}': custom execute (skipping LLM)`);
       // THE retry loop for custom-code nodes — same shape, same semantics as
@@ -103,12 +161,27 @@ export class Node {
       // describing nothing: the next node that trips it says why in its own
       // error line. (The LLM path has no such trap — a structured output
       // carrying `success:false` is returned as OUTPUT, never read as failure.)
+      // ONE loop, TWO budgets — see createAttemptBudget. `retries` keeps its
+      // exact old meaning (N retries on ANY failure, no delay); a failure
+      // POSITIVELY identified as transient may buy extra attempts on top, with
+      // backoff. `retries: 0` (the default) therefore still means "no retry on
+      // a bug" and now also means "a dead stream does not destroy the work".
+      const budget = createAttemptBudget(this.retries);
       let lastFailure: any = null;
-      for (let attempt = 0; attempt <= this.retries; attempt++) {
+      /**
+       * The THROWN error, kept beside the flattened failure result. It carries
+       * the strategy's structured provider fields (`providerErrorKind`, …) and
+       * the classifier reads them in preference to sniffing text — so this must
+       * not be flattened away. Null when the node RETURNED `{success:false}`
+       * instead of throwing, in which case the error string is all there is.
+       */
+      let lastThrown: unknown = null;
+      for (;;) {
         try {
           const result = await this.customExecute(context);
 
           if (typeof result === 'object' && result !== null && result.success === false) {
+            lastThrown = null;
             lastFailure = {
               success: false,
               error: result.error
@@ -133,12 +206,20 @@ export class Node {
             // gets a real log line, not `undefined`.
             logger.error(`Schema errors: ${JSON.stringify(error.issues || error.errors, null, 2)}`);
           }
+          lastThrown = error;
           lastFailure = { success: false, error: error.message, raw: null };
         }
-        if (attempt < this.retries) {
-          logger.info(`[workflow] node '${this.name}' failed, retrying (${attempt + 1}/${this.retries})…`);
-        }
+        // A returned `{success:false}` is classified off its `error` STRING; a
+        // throw is classified off the Error itself (which carries the strategy's
+        // structured provider fields). Either way ONE call, ONE decider.
+        const evidence = lastThrown ?? lastFailure?.error;
+        const decision = budget.next(evidence);
+        if (!await awaitRetry(this.name, decision, evidence, _aborted)) break;
       }
+      // How many attempts this node ACTUALLY made — the run's error line quotes
+      // it, and `retries + 1` stopped being that number the moment a transient
+      // failure could buy extra ones (see graph.ts).
+      if (lastFailure) lastFailure.attempts = budget.attemptsMade;
       return lastFailure;
     }
 
@@ -185,10 +266,12 @@ export class Node {
       logger.debug(`[workflow] could not update session info: ${err.message}`);
     }
 
+    // Same ONE budget as the custom-execute path above (createAttemptBudget).
+    const llmBudget = createAttemptBudget(this.retries);
     let lastError = null;
-    for (let attempt = 0; attempt <= this.retries; attempt++) {
+    for (;;) {
       try {
-        logger.debug(`[workflow] node '${this.name}' attempt ${attempt}`);
+        logger.debug(`[workflow] node '${this.name}' attempt ${llmBudget.attemptsMade - 1}`);
 
         const zibbyConfig = getAllState().config || {};
         // Per-node agent override. Precedence (highest first):
@@ -295,13 +378,14 @@ export class Node {
         return { success: true, output: rawOutput, raw: rawOutput };
       } catch (error) {
         lastError = error;
-        if (attempt < this.retries) {
-          logger.info(`[workflow] node '${this.name}' failed, retrying (${attempt + 1}/${this.retries})…`);
-        }
+        const decision = llmBudget.next(error);
+        if (!await awaitRetry(this.name, decision, error, _aborted)) break;
       }
     }
 
-    return { success: false, error: lastError.message, raw: null };
+    return {
+      success: false, error: lastError.message, raw: null, attempts: llmBudget.attemptsMade,
+    };
   }
 }
 

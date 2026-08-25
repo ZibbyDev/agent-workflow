@@ -45,6 +45,30 @@ export {
 // Node primitives
 export { Node } from './node.js';
 
+// Failure classification — THE one authority on "is this failure the provider
+// having a bad second, or a real bug?". Exported because three layers must
+// reach the SAME verdict: the retry loop in node.ts (in-process), a strategy
+// formatting the message it throws, and a fleet template reading a finished
+// run's `error` STRING off its execution record. One decider, three callers.
+export {
+  classifyFailure,
+  isTransientFailure,
+  formatProviderError,
+  providerErrorKindOf,
+  providerErrorStatusOf,
+  createAttemptBudget,
+  transientRetryBudget,
+  transientBackoffMs,
+  transientBackoffBaseMs,
+  PROVIDER_ERROR_KIND_CLASS,
+  TRANSIENT_MESSAGE_PATTERNS,
+  DEFAULT_TRANSIENT_RETRIES,
+  MAX_TRANSIENT_RETRIES,
+  DEFAULT_TRANSIENT_BACKOFF_MS,
+  MAX_TRANSIENT_BACKOFF_MS,
+} from './failure-class.js';
+export type { FailureClass, AttemptDecision } from './failure-class.js';
+
 // State
 export { WorkflowState } from './state.js';
 

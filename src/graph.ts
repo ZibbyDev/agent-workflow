@@ -1668,7 +1668,16 @@ export class WorkflowGraph {
           // one — the failure visible only as an `executionLog` entry nobody
           // reads. Two retry deciders that can disagree IS the bug; there is
           // one decider now, and it is Node.execute().
-          const attempts = (node.config?.retries || 0) + 1;
+          // `retries + 1` was the attempt count for as long as `retries` was
+          // the ONLY budget. It no longer is: a failure classified TRANSIENT can
+          // buy extra attempts (failure-class.ts createAttemptBudget), so the
+          // count is REPORTED by the one place that spent it — Node.execute —
+          // and only derived here when a caller predates that field. Deriving a
+          // number the other layer already knows is how "1 attempt(s)" came to
+          // be printed for runs that had made three.
+          const attempts = Number.isInteger(result.attempts) && result.attempts > 0
+            ? result.attempts
+            : (node.config?.retries || 0) + 1;
           timeline.nodeFailed(currentNode, result.error, { duration });
           throw new Error(`Node '${currentNode}' failed after ${attempts} attempt(s): ${result.error}`);
         }
