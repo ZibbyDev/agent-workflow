@@ -744,6 +744,42 @@ export class WorkflowGraph {
           (s && typeof s === 'object') ? { ...s } : s
         );
       }
+      // `uses: ['<alias>']` — WHICH DECLARED MEMBER THIS NODE TALKS TO.
+      //
+      // A template's `marketplace.requires` says "this agent CONSUMES a surface
+      // the `<slug>` agent publishes, under the handle `<as>`"; the platform
+      // installs that agent as a member and attaches its endpoint. `uses` is
+      // the other half: the NODE naming which of those handles it reaches for,
+      // so a reader (and the graph canvas) can answer "what is this attached
+      // agent here FOR" from data instead of from the template's import graph.
+      //
+      // A `!Ref` to another resource, deliberately NOT an entry in `skills` —
+      // that array answers "what credentials/connections does this node need",
+      // which is a different question. Nothing concrete is ever written here:
+      // no uuid, no URL, no credential — only a name the platform binds.
+      //
+      // ⚠️ WHITELISTED BECAUSE THIS BLOCK IS AN ALLOWLIST. Every field a node
+      // config carries into the serialized graph is named explicitly above
+      // (`description` had to be added for exactly the same reason). A field
+      // that is not listed here is DROPPED SILENTLY — the template compiles,
+      // the tests pass, the deploy succeeds, and the declaration reaches
+      // nothing. Whoever adds the next node-level declaration must add it here
+      // in the same change.
+      const nodeUses = Array.isArray(node?.config?.uses) ? node.config.uses
+                     : (typeof node?.config?.uses === 'string' ? [node.config.uses]
+                     : Array.isArray(node?.uses) ? node.uses
+                     : (typeof node?.uses === 'string' ? [node.uses] : null));
+      if (nodeUses && nodeUses.length > 0) {
+        const seen = new Set<string>();
+        const aliases: string[] = [];
+        for (const raw of nodeUses) {
+          const a = typeof raw === 'string' ? raw.trim() : '';
+          if (!a || seen.has(a)) continue;
+          seen.add(a);
+          aliases.push(a);
+        }
+        if (aliases.length > 0) config.uses = aliases;
+      }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
     }
 
