@@ -116,6 +116,34 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
  * chain (resolveInvocationModel, above), same cure: derive, don't duplicate.
  * A field added here now reaches BOTH paths by construction.
  */
+/**
+ * REASONING EFFORT for this invocation. Same shape of chain as the model, and
+ * for the same reason: the operator's per-node pin is the most specific thing
+ * anyone said, and every executor that re-derives this on its own is one more
+ * place to drift from it.
+ *   nodeConfigEffort (nodeConfigOverrides[node].effort — the dashboard's pick)
+ *   > options.effort (a node passing its own, e.g. a cheap triage pass)
+ *   > EFFORT env (the run-level default the executor stamps)
+ * Returns null when nobody said anything, which means "the vendor's own
+ * default" — never a value invented here.
+ * VALIDATED, not passed through: the levels are a closed set the CLIs accept
+ * (`claude --effort low|medium|high|xhigh|max`), and an unknown string reaching
+ * a vendor is an opaque runtime error rather than a visible bad pick.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+export function resolveInvocationEffort({ options = {}, envEffort, nodeConfigEffort }: any = {}) {
+  const pick = [nodeConfigEffort, options.effort, envEffort]
+    .map((v) => (typeof v === 'string' ? v.trim().toLowerCase() : ''))
+    .find(Boolean);
+  if (!pick) return null;
+  if (EFFORT_LEVELS.indexOf(pick) === -1) {
+    logger.warn(`[workflow] ignoring unknown effort "${pick}" — expected one of ${EFFORT_LEVELS.join(', ')}`);
+    return null;
+  }
+  return pick;
+}
+
 export function resolveInvocationExtras({ options = {}, stateView = {}, context = {} }: any = {}) {
   return {
     workspace: stateView.workspace || options.workspace,
@@ -203,10 +231,18 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     envModel: process.env.MODEL,
     nodeConfigModel,
   });
+  // Same vendor guard as the model: a pin aimed at another vendor is inert here.
+  const nodeConfigEffort = (!nodePinAgent || nodePinAgent === strategy.name) ? nodePin.effort : null;
+  const effort = resolveInvocationEffort({
+    options,
+    envEffort: process.env.EFFORT,
+    nodeConfigEffort,
+  });
 
   const finalOptions: any = {
     ...options,
     model,
+    ...(effort ? { effort } : {}),
     ...resolveInvocationExtras({ options, stateView, context }),
     config,
   };

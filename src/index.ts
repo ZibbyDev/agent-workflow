@@ -95,7 +95,7 @@ export { validateStoreDefs, STORE_NAME_REGEX } from './stores.js';
 
 // Agent strategy system
 export { AgentStrategy } from './agents/base.js';
-export { registerStrategy, listStrategies, getAgentStrategy, invokeAgent, resolveInvocationModel, resolveInvocationExtras } from './strategy-registry.js';
+export { registerStrategy, listStrategies, getAgentStrategy, invokeAgent, resolveInvocationModel, resolveInvocationExtras, resolveInvocationEffort, EFFORT_LEVELS } from './strategy-registry.js';
 
 // Code generation (compile graph config to runnable JS)
 export { generateWorkflowCode, generateNodeConfigsJson } from './code-generator.js';
