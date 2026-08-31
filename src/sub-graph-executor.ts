@@ -526,7 +526,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // but a normal response prevents an orphan from spending credits until its
   // independent runtime cap.
   try {
-    const cancelDl = makeDeadline(5000, 'SUBGRAPH_CANCEL_TIMEOUT_MS');
+    // This runs after the caller's authored wait has already expired. Keep the
+    // cleanup attempt deliberately tiny so best-effort cancellation cannot
+    // become a second, hidden execution timeout of its own.
+    const cancelDl = makeDeadline(500, 'SUBGRAPH_CANCEL_TIMEOUT_MS');
     const cancelResp = await fetch(`${statusUrl}/cancel`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}` },
