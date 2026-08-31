@@ -265,15 +265,19 @@ describe('dispatchSubgraph — sync mode', () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it('times out and throws when child never reaches terminal status', async () => {
+  it('times out, cancels the ordinary child, and then throws', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))
-      // Every subsequent call returns "running" indefinitely.
+      // Polls remain running; the final POST cancel succeeds.
       .mockResolvedValue(mockResponse({ json: { data: { status: 'running' } } }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(dispatchSubgraph('child', { pollIntervalMs: 1, timeoutMs: 5 }))
       .rejects.toThrow(/timed out/);
+    const cancelCall = fetchMock.mock.calls.find(([url, init]) =>
+      url === 'https://api.example.com/executions/c/cancel' && init?.method === 'POST');
+    expect(cancelCall).toBeTruthy();
+    expect(cancelCall[1].headers.Authorization).toBe('Bearer tok-abc');
   });
 });
 

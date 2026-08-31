@@ -40,7 +40,7 @@ import { getExecContext } from './exec-context.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled', 'timeout']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'timeout']);
 
 /* ── FETCH BUDGETS ──────────────────────────────────────────────────────────
  * The numbers and the helpers live in ONE place — `./fetch-deadline.js` — and
@@ -519,9 +519,25 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     }
   }
 
-  // Timed out without reaching terminal — cancel the child? For v1 we
-  // just throw so the parent's error path runs; manual cleanup via the
-  // activity tab. Orphan-reaper Lambda (future) handles long-term cleanup.
+  // Timed out without reaching terminal. The child is an ordinary visible
+  // child execution, so use the ordinary cancel endpoint before returning the
+  // timeout to the parent. Cancellation is best-effort: the timeout remains the
+  // caller-visible result even if the control plane is briefly unreachable,
+  // but a normal response prevents an orphan from spending credits until its
+  // independent runtime cap.
+  try {
+    const cancelDl = makeDeadline(5000, 'SUBGRAPH_CANCEL_TIMEOUT_MS');
+    const cancelResp = await fetch(`${statusUrl}/cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: cancelDl.signal,
+    });
+    if (!cancelResp.ok && cancelResp.status !== 400 && cancelResp.status !== 404) {
+      logger.warn(`[sub-graph] best-effort cancel for ${jobId} returned ${cancelResp.status}`);
+    }
+  } catch (cancelErr: any) {
+    logger.warn(`[sub-graph] best-effort cancel for ${jobId} failed: ${cancelErr?.message || String(cancelErr)}`);
+  }
   throw subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus, lastTransportError);
 }
 
