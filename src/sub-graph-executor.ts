@@ -265,6 +265,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   if (
     process.env.ZIBBY_INPROCESS_SUBGRAPH !== '0'
     && !options.async
+    // A participant binding intentionally crosses workflow/vendor identity
+    // and must run as its own execution. It can never borrow the parent's
+    // process, credentials or custom MCP surface.
+    && !options.participantBindingId
   ) {
     try {
       logger.debug(`[sub-graph] trying in-process for '${workflowName}'`);
@@ -296,11 +300,18 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   const authToken = getAuthToken();
   const parentExecutionId = getParentExecutionId();
 
-  const triggerUrl = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/trigger`;
+  // The reserved URL slug carries no authority for participant dispatch. The
+  // backend resolves parent execution -> host UUID -> binding -> worker UUID
+  // and ignores this slug after routing. Ordinary subgraphs keep their exact
+  // historical URL.
+  const triggerWorkflowName = options.participantBindingId ? 'participant' : workflowName;
+  const triggerUrl = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(triggerWorkflowName)}/trigger`;
   const body: any = {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+    ...(options.participantBindingId ? { participantBindingId: options.participantBindingId } : {}),
+    ...(options.protocolId ? { protocolId: options.protocolId } : {}),
   };
 
   logger.info(`[sub-graph] dispatching '${workflowName}' (${options.async ? 'async' : 'sync'}) from parent ${parentExecutionId || '<none>'}`);
@@ -509,4 +520,23 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // just throw so the parent's error path runs; manual cleanup via the
   // activity tab. Orphan-reaper Lambda (future) handles long-term cleanup.
   throw subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus, lastTransportError);
+}
+
+/**
+ * Dispatch one owner-bound collaboration participant as an independent child.
+ * Always async: an event-driven Host persists the returned jobId and exits;
+ * parent-bell/reconcile wakes a later tick when the child reaches terminal.
+ */
+export async function dispatchParticipant(bindingId: string, options: any = {}) {
+  if (!bindingId || typeof bindingId !== 'string') {
+    throw new Error('dispatchParticipant: bindingId (string) is required');
+  }
+  if (!options.protocolId || typeof options.protocolId !== 'string') {
+    throw new Error('dispatchParticipant: protocolId (string) is required');
+  }
+  return dispatchSubgraph('participant', {
+    ...options,
+    async: true,
+    participantBindingId: bindingId,
+  });
 }

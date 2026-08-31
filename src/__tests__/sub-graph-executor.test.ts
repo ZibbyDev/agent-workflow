@@ -7,7 +7,7 @@
  * PROJECT_ID, PROJECT_API_TOKEN, EXECUTION_ID) before invoking.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { dispatchSubgraph } from '../sub-graph-executor.js';
+import { dispatchSubgraph, dispatchParticipant } from '../sub-graph-executor.js';
 
 function mockResponse({ ok = true, status = 200, json } = {}) {
   return {
@@ -112,6 +112,45 @@ describe('dispatchSubgraph — async (fire-and-forget) mode', () => {
     await dispatchSubgraph('child', { async: true, conversationId: 'slack:T123:t456' });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.conversationId).toBe('slack:T123:t456');
+  });
+});
+
+describe('dispatchParticipant — UUID binding dispatch', () => {
+  it('uses a non-authoritative reserved URL and sends binding + protocol + parent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ json: { data: { jobId: 'participant-job-1' } } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await dispatchParticipant('critic', {
+      protocolId: 'discuss.v1',
+      input: { objective: 'Review the merge proposal' },
+    });
+
+    expect(result).toEqual({ jobId: 'participant-job-1', status: 'accepted', workflow: 'participant' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.example.com/projects/proj-1/workflows/participant/trigger');
+    expect(JSON.parse(init.body)).toEqual({
+      input: { objective: 'Review the merge proposal' },
+      parentExecutionId: 'parent-exec-99',
+      participantBindingId: 'critic',
+      protocolId: 'discuss.v1',
+    });
+  });
+
+  it('requires binding and protocol before any request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(dispatchParticipant('', { protocolId: 'discuss.v1' })).rejects.toThrow(/bindingId/);
+    await expect(dispatchParticipant('critic', {})).rejects.toThrow(/protocolId/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('forces async even when a caller asks to wait', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'participant-job-2' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await dispatchParticipant('analyst', { protocolId: 'discuss.v1', async: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // trigger only; no polling
   });
 });
 
