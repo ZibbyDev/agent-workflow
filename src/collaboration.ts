@@ -110,7 +110,11 @@ export async function runCollaboration(options: any = {}, deps: any = {}) {
         phase,
         role,
         contextRevision: 0,
-        context,
+        // `context` is an engine-owned state namespace in child workflows.
+        // A protocol payload using that name is overwritten by the runtime
+        // context object and arrives in prompts as "[object Object]". Keep the
+        // wire field explicit and collision-free.
+        sharedContext: context,
         priorContributions,
         ...(options.instruction ? { instruction: String(options.instruction).slice(0, 4000) } : {}),
       },

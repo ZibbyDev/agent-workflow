@@ -51,6 +51,8 @@ describe('collaboration LEGO budget + protocol', () => {
     ]);
     expect(dispatch.mock.calls.every((c) => c[1].async === false)).toBe(true);
     expect(dispatch.mock.calls.every((c) => !Object.hasOwn(c[1].input, 'model'))).toBe(true);
+    expect(dispatch.mock.calls.every((c) => c[1].input.sharedContext === 'same revision')).toBe(true);
+    expect(dispatch.mock.calls.every((c) => !Object.hasOwn(c[1].input, 'context'))).toBe(true);
   });
 });
 
