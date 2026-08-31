@@ -28,6 +28,27 @@ describe('collaboration LEGO budget + protocol', () => {
     expect(required).toMatchObject({ status: 'incomplete', required: true, observed: false });
   });
 
+  it('treats an empty selected roster as an optional bypass and starts no model child', async () => {
+    const dispatch = vi.fn();
+    const result = await runCollaboration({
+      objective: 'review', timeoutMs: 60_000, reserveMs: 1,
+    }, {
+      remainingWorkflowTimeMs: () => 120_000,
+      listParticipants: vi.fn(async () => []),
+      dispatchParticipant: dispatch,
+    });
+
+    expect(result).toMatchObject({
+      requested: true,
+      required: false,
+      observed: false,
+      status: 'skipped',
+      reason: 'no_available_participants',
+      contributions: [],
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('runs draft, adversarial critique, then synthesis across bound participants', async () => {
     const roster = [participant('claude', ['draft', 'synthesize']), participant('codex', ['critic'])];
     const dispatch = vi.fn(async (bindingId, options) => ({
