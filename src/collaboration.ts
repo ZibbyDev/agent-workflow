@@ -45,6 +45,36 @@ function roleParticipant(participants, role, fallback) {
   return participants.find((p) => Array.isArray(p.roles) && p.roles.includes(role)) || fallback;
 }
 
+const CONTRIBUTION_ARRAY_FIELDS = [
+  'claims', 'assumptions', 'risks', 'objections', 'decisions',
+  'evidenceGaps', 'recommendations', 'artifactRefs',
+];
+
+/**
+ * A child execution being `completed` only proves its process exited cleanly.
+ * The generic output parser deliberately falls back to raw text when a model
+ * emits malformed JSON, so the collaboration protocol must validate its own
+ * evidence before counting a phase as observed.
+ */
+function validContribution(raw: any, phase: string, role: string) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { value = null; }
+  }
+  const valid = value && typeof value === 'object' && !Array.isArray(value)
+    && value.phase === phase
+    && value.role === role
+    && value.contextRevision === 0
+    && typeof value.summary === 'string'
+    && CONTRIBUTION_ARRAY_FIELDS.every((field) => Array.isArray(value[field]));
+  if (!valid) {
+    const error: any = new Error(`Participant returned invalid ${phase} protocol output`);
+    error.code = 'PARTICIPANT_OUTPUT_INVALID';
+    throw error;
+  }
+  return value;
+}
+
 /**
  * One bounded discuss.v1 council for an ordinary graph node. This is a caller
  * of the durable Collaboration Runtime, not the long-lived Host: it may wait
@@ -99,26 +129,44 @@ export async function runCollaboration(options: any = {}, deps: any = {}) {
     const childTimeoutMs = Number.isFinite(participantLimit) && participantLimit > 0
       ? Math.min(left, participantLimit)
       : left;
-    const contribution = await dispatch(participant.id, {
-      async: false,
-      protocolId,
-      timeoutMs: childTimeoutMs,
-      output: 'contribute',
-      input: {
-        objective,
+    let contribution;
+    let lastInvalid: any = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const correction = attempt === 1
+        ? 'Your previous attempt did not satisfy the JSON protocol. Return exactly one valid JSON object with every required array field and no Markdown, preface, trailing commas, or comments.'
+        : '';
+      // eslint-disable-next-line no-await-in-loop -- retry is bounded to one invalid protocol result
+      const raw = await dispatch(participant.id, {
+        async: false,
         protocolId,
-        phase,
-        role,
-        contextRevision: 0,
-        // `context` is an engine-owned state namespace in child workflows.
-        // A protocol payload using that name is overwritten by the runtime
-        // context object and arrives in prompts as "[object Object]". Keep the
-        // wire field explicit and collision-free.
-        sharedContext: context,
-        priorContributions,
-        ...(options.instruction ? { instruction: String(options.instruction).slice(0, 4000) } : {}),
-      },
-    });
+        timeoutMs: Math.min(childTimeoutMs, Math.max(1000, deadline - Date.now())),
+        output: 'contribute',
+        input: {
+          objective,
+          protocolId,
+          phase,
+          role,
+          contextRevision: 0,
+          // `context` is an engine-owned state namespace in child workflows.
+          // A protocol payload using that name is overwritten by the runtime
+          // context object and arrives in prompts as "[object Object]". Keep the
+          // wire field explicit and collision-free.
+          sharedContext: context,
+          priorContributions,
+          ...((options.instruction || correction) ? {
+            instruction: [options.instruction, correction].filter(Boolean).join('\n').slice(0, 4000),
+          } : {}),
+        },
+      });
+      try {
+        contribution = validContribution(raw, phase, role);
+        lastInvalid = null;
+        break;
+      } catch (error) {
+        lastInvalid = error;
+      }
+    }
+    if (lastInvalid) throw lastInvalid;
     const ref = contributionRef(participant, phase, contribution);
     contributions.push(ref);
     return ref;

@@ -54,6 +54,42 @@ describe('collaboration LEGO budget + protocol', () => {
     expect(dispatch.mock.calls.every((c) => c[1].input.sharedContext === 'same revision')).toBe(true);
     expect(dispatch.mock.calls.every((c) => !Object.hasOwn(c[1].input, 'context'))).toBe(true);
   });
+
+  it('retries one raw/malformed contribution and only counts schema-shaped evidence', async () => {
+    const roster = [participant('claude', ['draft', 'critic', 'synthesize'])];
+    let calls = 0;
+    const dispatch = vi.fn(async (_bindingId, options) => {
+      calls += 1;
+      if (calls === 1) return '{"phase":"draft",}';
+      return {
+        phase: options.input.phase, role: options.input.role, contextRevision: 0,
+        summary: 'valid', claims: [], assumptions: [], risks: [], objections: [], decisions: [],
+        evidenceGaps: [], recommendations: [], artifactRefs: [],
+      };
+    });
+    const result = await runCollaboration({ objective: 'review', timeoutMs: 60_000, reserveMs: 1 }, {
+      remainingWorkflowTimeMs: () => 120_000,
+      listParticipants: vi.fn(async () => roster),
+      dispatchParticipant: dispatch,
+    });
+    expect(result).toMatchObject({ status: 'completed', observed: true, failures: [] });
+    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(dispatch.mock.calls[1][1].input.instruction).toMatch(/previous attempt/);
+  });
+
+  it('fails closed when both attempts return raw text', async () => {
+    const dispatch = vi.fn(async () => 'looks plausible but is not protocol evidence');
+    const result = await runCollaboration({ objective: 'review', required: true, timeoutMs: 60_000, reserveMs: 1 }, {
+      remainingWorkflowTimeMs: () => 120_000,
+      listParticipants: vi.fn(async () => [participant('claude', ['draft'])]),
+      dispatchParticipant: dispatch,
+    });
+    expect(result).toMatchObject({
+      status: 'incomplete', observed: false, reason: 'draft_failed',
+      failures: [{ phase: 'draft', code: 'PARTICIPANT_OUTPUT_INVALID' }],
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('WorkflowGraph collaboration declaration', () => {
