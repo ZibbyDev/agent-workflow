@@ -7,7 +7,7 @@
  * PROJECT_ID, PROJECT_API_TOKEN, EXECUTION_ID) before invoking.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { dispatchSubgraph, dispatchParticipant } from '../sub-graph-executor.js';
+import { dispatchSubgraph, dispatchParticipant, listParticipants } from '../sub-graph-executor.js';
 
 function mockResponse({ ok = true, status = 200, json } = {}) {
   return {
@@ -124,6 +124,7 @@ describe('dispatchParticipant — UUID binding dispatch', () => {
 
     const result = await dispatchParticipant('critic', {
       protocolId: 'discuss.v1',
+      idempotencyKey: 'council:review-1:critic',
       input: { objective: 'Review the merge proposal' },
     });
 
@@ -133,6 +134,7 @@ describe('dispatchParticipant — UUID binding dispatch', () => {
     expect(JSON.parse(init.body)).toEqual({
       input: { objective: 'Review the merge proposal' },
       parentExecutionId: 'parent-exec-99',
+      idempotencyKey: 'council:review-1:critic',
       participantBindingId: 'critic',
       protocolId: 'discuss.v1',
     });
@@ -146,11 +148,30 @@ describe('dispatchParticipant — UUID binding dispatch', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('forces async even when a caller asks to wait', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'participant-job-2' } }));
+  it('joins the independent participant execution when a bounded node explicitly asks to wait', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'participant-job-2' } }))
+      .mockResolvedValueOnce(mockResponse({ json: { status: 'completed', finalState: { contribute: { summary: 'done' } } } }));
     vi.stubGlobal('fetch', fetchMock);
-    await dispatchParticipant('analyst', { protocolId: 'discuss.v1', async: false });
-    expect(fetchMock).toHaveBeenCalledTimes(1); // trigger only; no polling
+    const got = await dispatchParticipant('analyst', {
+      protocolId: 'discuss.v1', async: false, pollIntervalMs: 1, output: 'contribute',
+    });
+    expect(got).toEqual({ summary: 'done' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the parent-owned runtime roster through the reserved trigger door', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ json: { participants: [
+      { id: 'claude', vendor: 'claude', available: true },
+      { id: 'codex', vendor: 'codex', available: true },
+    ] } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(listParticipants('discuss.v1')).resolves.toHaveLength(2);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/workflows/participant/trigger');
+    expect(JSON.parse(init.body)).toEqual({
+      participantOperation: 'list', parentExecutionId: 'parent-exec-99', protocolId: 'discuss.v1',
+    });
   });
 });
 

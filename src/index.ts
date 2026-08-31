@@ -32,7 +32,8 @@ export { WorkflowGraph, WorkflowGraph as Graph } from './graph.js';
 // Sub-graph dispatch — for custom-execute nodes that need to fan out
 // to multiple child workflows in a loop (the declarative
 // `addNode({ workflow: 'name' })` form only dispatches once per node).
-export { dispatchSubgraph, dispatchParticipant } from './sub-graph-executor.js';
+export { dispatchSubgraph, dispatchParticipant, listParticipants } from './sub-graph-executor.js';
+export { runCollaboration, remainingWorkflowTimeMs } from './collaboration.js';
 export {
   generateWorkflowSessionId,
   resolveWorkflowSession,

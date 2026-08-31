@@ -310,6 +310,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+    ...(typeof options.idempotencyKey === 'string' && options.idempotencyKey
+      ? { idempotencyKey: options.idempotencyKey.slice(0, 200) }
+      : {}),
     ...(options.participantBindingId ? { participantBindingId: options.participantBindingId } : {}),
     ...(options.protocolId ? { protocolId: options.protocolId } : {}),
   };
@@ -524,8 +527,8 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
 
 /**
  * Dispatch one owner-bound collaboration participant as an independent child.
- * Always async: an event-driven Host persists the returned jobId and exits;
- * parent-bell/reconcile wakes a later tick when the child reaches terminal.
+ * Async by default: an event-driven Host persists the returned jobId and exits.
+ * A bounded graph LEGO may explicitly pass `async:false` and join the child.
  */
 export async function dispatchParticipant(bindingId: string, options: any = {}) {
   if (!bindingId || typeof bindingId !== 'string') {
@@ -536,7 +539,56 @@ export async function dispatchParticipant(bindingId: string, options: any = {}) 
   }
   return dispatchSubgraph('participant', {
     ...options,
-    async: true,
+    // Event-driven hosts omit `async` and keep the historical fire-and-forget
+    // contract. A bounded collaboration graph node explicitly passes
+    // `async:false` so the same authorized participant execution is joined
+    // inside the caller's remaining clock.
+    async: options.async !== false,
     participantBindingId: bindingId,
   });
+}
+
+/**
+ * Read the enabled, protocol-authorized participant roster owned by the
+ * currently-running workflow. Uses the reserved participant trigger door so
+ * cloud adds no new API resource; the backend returns before credit/spawn gates.
+ */
+export async function listParticipants(protocolId: string) {
+  if (!protocolId || typeof protocolId !== 'string') {
+    throw new Error('listParticipants: protocolId (string) is required');
+  }
+  const apiBase = getApiBase();
+  const projectId = getProjectId();
+  const authToken = getAuthToken();
+  const parentExecutionId = getParentExecutionId();
+  if (!parentExecutionId) {
+    const e: any = new Error('Collaboration requires a running parent execution');
+    e.code = 'PARENT_EXECUTION_REQUIRED';
+    throw e;
+  }
+  const url = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/participant/trigger`;
+  const dl = triggerDeadline();
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ participantOperation: 'list', parentExecutionId, protocolId }),
+      signal: dl.signal,
+    });
+  } catch (err: any) {
+    const e: any = new Error(`Participant roster lookup failed: ${err?.message || String(err)}`);
+    e.code = isTimeoutError(err) ? 'PARTICIPANT_ROSTER_TIMEOUT' : 'PARTICIPANT_ROSTER_UNAVAILABLE';
+    e.cause = err;
+    throw e;
+  }
+  let body: any = null;
+  try { body = await response.json(); } catch { /* handled below */ }
+  if (!response.ok) {
+    const e: any = new Error(body?.error || `Participant roster lookup rejected (${response.status})`);
+    e.code = body?.code || 'PARTICIPANT_ROSTER_REJECTED';
+    e.status = response.status;
+    throw e;
+  }
+  return Array.isArray(body?.participants) ? body.participants : [];
 }

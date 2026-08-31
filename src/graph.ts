@@ -16,6 +16,7 @@
 import { WorkflowState } from './state.js';
 import { Node } from './node.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
+import { runCollaboration } from './collaboration.js';
 import { withAgentContext } from './exec-context.js';
 import { ContextLoader } from './context-loader.js';
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -310,6 +311,59 @@ export class WorkflowGraph {
   }
 
   addNode(name, nodeOrConfig, options: any = {}) {
+    // Collaboration LEGO. This is an additive, authored node boundary: the
+    // graph author owns protocol/trigger/budget semantics, while the end user
+    // only selects connected AI tokens in Settings. No model/provider picker
+    // lives on this node. Each invocation resolves the parent workflow's
+    // participant bindings at runtime and joins independent vendor executions.
+    if (!(nodeOrConfig instanceof Node) && nodeOrConfig && typeof nodeOrConfig === 'object' && nodeOrConfig.collaboration) {
+      const declared = typeof nodeOrConfig.collaboration === 'object'
+        ? nodeOrConfig.collaboration
+        : {};
+      const wrapped: any = {
+        name,
+        _isCustomCode: true,
+        collaboration: {
+          protocolId: declared.protocolId || 'discuss.v1',
+          required: declared.required === true,
+          timeoutMs: declared.timeoutMs,
+          reserveMs: declared.reserveMs,
+        },
+        description: nodeOrConfig.description,
+        retries: nodeOrConfig.retries,
+        onComplete: nodeOrConfig.onComplete,
+        execute: async (context) => {
+          const allState = context?.state && typeof context.state.getAll === 'function'
+            ? context.state.getAll()
+            : context;
+          const resolveValue = (value, fallback = '') => typeof value === 'function'
+            ? value(allState)
+            : (value ?? fallback);
+          const result: any = await runCollaboration({
+            protocolId: declared.protocolId,
+            required: declared.required,
+            timeoutMs: declared.timeoutMs,
+            reserveMs: declared.reserveMs,
+            objective: resolveValue(declared.objective),
+            context: resolveValue(declared.context),
+            instruction: resolveValue(declared.instruction),
+          });
+          if (declared.required === true && result.status !== 'completed') {
+            const err: any = new Error(`Required collaboration did not complete: ${result.reason || result.status}`);
+            err.code = 'COLLABORATION_REQUIRED_INCOMPLETE';
+            err.collaborationResult = result;
+            throw err;
+          }
+          return result;
+        },
+      };
+      const node = new Node(wrapped);
+      node.name = name;
+      this.nodes.set(name, node);
+      if (Object.keys(options).length > 0) this.nodeOptions.set(name, options);
+      return this;
+    }
+
     // Sub-graph short-circuit. If the node config declares another
     // workflow as its body (`{ workflow: 'other-name' }`), wrap it as a
     // custom-execute node that POSTs to the trigger endpoint and (for
@@ -595,6 +649,28 @@ export class WorkflowGraph {
             : null;
       if (description) {
         config.description = description;
+      }
+      // Authored collaboration metadata is display-only in the serialized
+      // graph. The Node Modal does not edit it and never shows provider/model
+      // setup; runtime participant selection comes from owner-managed bindings.
+      const collaboration = node?.config?.collaboration;
+      if (collaboration && typeof collaboration === 'object') {
+        config.collaboration = {
+          protocolId: collaboration.protocolId || 'discuss.v1',
+          required: collaboration.required === true,
+          ...(Number.isFinite(collaboration.timeoutMs) ? { timeoutMs: collaboration.timeoutMs } : {}),
+          ...(Number.isFinite(collaboration.reserveMs) ? { reserveMs: collaboration.reserveMs } : {}),
+        };
+      }
+      // Event-driven consumers such as MAGNUM use the same participant roster
+      // without waiting inside the node. This marker is authored metadata for
+      // Settings/canvas discovery only; the node's deterministic execute code
+      // owns its durable ledger/doorbell behaviour.
+      const collaborationAsync = node?.config?.collaborationAsync;
+      if (collaborationAsync && typeof collaborationAsync === 'object') {
+        config.collaborationAsync = {
+          protocolId: collaborationAsync.protocolId || 'discuss.v1',
+        };
       }
       const prompt = this.nodePrompts.get(nodeId);
       if (prompt) {
