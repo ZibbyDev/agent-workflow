@@ -85,11 +85,27 @@ function neverAnswers(init: any) {
   });
 }
 
+/** Reproduces a transport bug where abort closes the socket but its promise
+ * never settles. The Promise-level deadline must still release the caller. */
+function ignoresAbortForever() {
+  return new Promise(() => {});
+}
+
 const okJson = (json: any) => ({ ok: true, status: 200, json: async () => json, text: async () => JSON.stringify(json) });
 
 // ── the trigger POST ────────────────────────────────────────────────────────
 
 describe('the trigger POST is bounded', () => {
+  it('settles even when the transport ignores abort and never rejects', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => ignoresAbortForever()));
+
+    const t0 = Date.now();
+    const err: any = await dispatchSubgraph('frontend-specialist', { input: {}, async: true }).catch((e) => e);
+
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(err.code).toBe('SUBGRAPH_TRIGGER_TIMEOUT');
+  });
+
   it('a trigger that never answers rejects inside the budget instead of hanging', async () => {
     vi.stubGlobal('fetch', vi.fn((_url: any, init: any) => neverAnswers(init)));
 
@@ -214,6 +230,19 @@ describe('the status poll is bounded per request', () => {
     // The remembered text distinguishes "too slow" from "unreachable".
     expect(err.subgraphTransportError).toContain('poll TIMED OUT after');
     expect(err.subgraphTransportError).toContain('SUBGRAPH_POLL_TIMEOUT_MS');
+  });
+
+  it('a poll transport that ignores abort cannot strand Promise.allSettled', async () => {
+    const calls = stubTrigger(() => ignoresAbortForever());
+
+    const t0 = Date.now();
+    const err: any = await dispatchSubgraph('frontend-specialist', {
+      input: {}, async: false, timeoutMs: 3000, pollIntervalMs: 1,
+    }).catch((e) => e);
+
+    expect(err.code).toBe('SUBGRAPH_TIMEOUT');
+    expect(calls.poll).toBeGreaterThan(1);
+    expect(Date.now() - t0).toBeLessThan(6000);
   });
 
   it('a stalled poll BODY is the same class — retried, not fatal', async () => {

@@ -782,6 +782,20 @@ export class WorkflowGraph {
       if (nodeSkills && nodeSkills.length > 0) {
         config.skills = [...nodeSkills];
       }
+      // Integration requirements a node explicitly DEMOTES to optional must
+      // survive beside `skills`. The backend derives required/optional setup
+      // from the SERIALIZED graph, not this live Node instance; dropping this
+      // field turns every load-but-don't-gate provider back into a hard AND.
+      // That is especially destructive for general collaboration workers:
+      // GitHub + GitLab + three doc providers are all available tools, but the
+      // agent must run with any subset (including none). Additive and guarded,
+      // so graphs that do not declare optionalSkills remain byte-identical.
+      const nodeOptionalSkills = Array.isArray(node?.config?.optionalSkills) ? node.config.optionalSkills
+                               : Array.isArray(node?.optionalSkills) ? node.optionalSkills
+                               : null;
+      if (nodeOptionalSkills && nodeOptionalSkills.length > 0) {
+        config.optionalSkills = [...nodeOptionalSkills];
+      }
       // Native plugins DECLARED on the node (e.g. Codex plugins:
       //   plugins: [{ name, marketplacePath }]
       // ). Survive serialization so the saved workflow row carries the

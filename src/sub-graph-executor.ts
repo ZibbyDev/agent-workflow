@@ -78,6 +78,7 @@ import {
   makeDeadline,
   deadlineFor,
   isTimeoutError,
+  settleWithin,
 } from './fetch-deadline.js';
 
 // Re-exported so a consumer can read the engine's budgets from the module that
@@ -187,6 +188,9 @@ function resolveOutput(finalState, output) {
  *   are dot-paths on finalState (e.g. 'double.doubled'). Function form
  *   gets the full finalState and returns whatever shape the parent
  *   wants. Omit to merge the whole child finalState into parent state.
+ *   On the HTTP path, a string is also sent as `resultPath` so the
+ *   control plane can persist only that declared result before applying
+ *   its final-state size cap. Function extractors remain local-only.
  *
  * @returns {Promise<any>}
  *   async: `{ jobId, status: 'accepted' }`
@@ -309,6 +313,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   const body: any = {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
+    ...(!options.async && typeof options.output === 'string' && options.output.trim()
+      ? { resultPath: options.output.trim() }
+      : {}),
     ...(options.conversationId ? { conversationId: options.conversationId } : {}),
     ...(typeof options.idempotencyKey === 'string' && options.idempotencyKey
       ? { idempotencyKey: options.idempotencyKey.slice(0, 200) }
@@ -324,7 +331,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   const triggerDl = triggerDeadline();
   let triggerResp: Response;
   try {
-    triggerResp = await fetch(triggerUrl, {
+    triggerResp = await settleWithin(fetch(triggerUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -332,7 +339,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       },
       body: JSON.stringify(body),
       signal: triggerDl.signal,
-    });
+    }), triggerDl.signal);
   } catch (err: any) {
     // A NON-timeout error is rethrown UNCHANGED — the same object, the same
     // message (undici's bare `TypeError: fetch failed`), the same `.status` —
@@ -353,10 +360,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     let errJson = null;
     let detail = '';
     try {
-      errJson = await triggerResp.json();
+      errJson = await settleWithin(triggerResp.json(), triggerDl.signal);
       detail = errJson?.error || errJson?.message || JSON.stringify(errJson);
     } catch {
-      detail = await triggerResp.text().catch(() => '');
+      detail = await settleWithin(triggerResp.text(), triggerDl.signal).catch(() => '');
     }
 
     // Quota exceeded — the parent workflow burns no further sub-graph
@@ -407,7 +414,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // try/catch, on this same signal.)
   let triggerJson: any;
   try {
-    triggerJson = await triggerResp.json();
+    triggerJson = await settleWithin(triggerResp.json(), triggerDl.signal);
   } catch (err: any) {
     if (!isTimeoutError(err)) throw err;
     const e: any = new Error(
@@ -468,10 +475,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     const pollDl = pollDeadline(deadline);
     let statusResp: Response;
     try {
-      statusResp = await fetch(statusUrl, {
+      statusResp = await settleWithin(fetch(statusUrl, {
         headers: { Authorization: `Bearer ${authToken}` },
         signal: pollDl.signal,
-      });
+      }), pollDl.signal);
     } catch (e: any) {
       // A timeout is the same class as a transport throw and takes the same
       // branch — no answer about the child means ASK AGAIN, and the loop's own
@@ -492,7 +499,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     }
     let statusJson: any;
     try {
-      statusJson = await statusResp.json();
+      statusJson = await settleWithin(statusResp.json(), pollDl.signal);
     } catch (e: any) {
       // A truncated/half-read body is the same class as the throw above:
       // no answer about the child, so ask again rather than give up. The read
@@ -530,11 +537,11 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     // cleanup attempt deliberately tiny so best-effort cancellation cannot
     // become a second, hidden execution timeout of its own.
     const cancelDl = makeDeadline(500, 'SUBGRAPH_CANCEL_TIMEOUT_MS');
-    const cancelResp = await fetch(`${statusUrl}/cancel`, {
+    const cancelResp = await settleWithin(fetch(`${statusUrl}/cancel`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}` },
       signal: cancelDl.signal,
-    });
+    }), cancelDl.signal);
     if (!cancelResp.ok && cancelResp.status !== 400 && cancelResp.status !== 404) {
       logger.warn(`[sub-graph] best-effort cancel for ${jobId} returned ${cancelResp.status}`);
     }

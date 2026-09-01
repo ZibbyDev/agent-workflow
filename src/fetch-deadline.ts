@@ -132,3 +132,37 @@ export function deadlineFor(knob: string, fallback: number) {
 export function isTimeoutError(err: any) {
   return err?.name === 'TimeoutError' || err?.name === 'AbortError';
 }
+
+/**
+ * Make the deadline authoritative even when the underlying transport ignores
+ * abort or removes its socket without settling the returned promise.
+ *
+ * `fetch(..., { signal })` is still required so the transport gets a chance to
+ * clean up. This second layer is the caller contract: once the signal fires,
+ * the await settles immediately and late transport completion is ignored.
+ */
+export function settleWithin<T>(promise: PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    // The transport may still reject later even though our caller deadline has
+    // already elapsed. Observe that late rejection so it cannot become an
+    // unhandled promise while returning the deadline result immediately.
+    Promise.resolve(promise).catch(() => {});
+    return Promise.reject(signal.reason);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    Promise.resolve(promise).then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}

@@ -208,6 +208,24 @@ describe('dispatchSubgraph — sync mode', () => {
 
     const result = await dispatchSubgraph('deep-audit', { output: 'audit.score', pollIntervalMs: 1 });
     expect(result).toBe(99);
+    const triggerBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(triggerBody.resultPath).toBe('audit.score');
+  });
+
+  it('does not send a resultPath for a function extractor', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))
+      .mockResolvedValueOnce(mockResponse({
+        json: { data: { status: 'completed', finalState: { audit: { score: 99 } } } },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await dispatchSubgraph('deep-audit', {
+      output: (state) => state.audit.score,
+      pollIntervalMs: 1,
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).resultPath).toBeUndefined();
   });
 
   it('extracts via function when `output` is callable (LangGraph wrapper-function parity)', async () => {
