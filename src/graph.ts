@@ -728,18 +728,37 @@ export class WorkflowGraph {
         )];
         if (slugs.length) config.dispatchesWorkflow = slugs;
       }
+      // A dispatch roster may declare an N-of-M readiness threshold. Without
+      // this field every declared child remains required (the historical
+      // behavior). Readiness consumers apply it to this node's own roster.
+      const minimumReadyChildren = node?.config?.minimumReadyChildren;
+      if (minimumReadyChildren != null) {
+        if (!Number.isInteger(minimumReadyChildren) || minimumReadyChildren <= 0) {
+          throw new Error(
+            `Node '${nodeId}' minimumReadyChildren must be a positive integer`,
+          );
+        }
+        const dispatchedCount = typeof config.dispatchesWorkflow === 'string'
+          ? 1
+          : Array.isArray(config.dispatchesWorkflow) ? config.dispatchesWorkflow.length : 0;
+        if (minimumReadyChildren > dispatchedCount) {
+          throw new Error(
+            `Node '${nodeId}' minimumReadyChildren (${minimumReadyChildren}) exceeds its declared dispatch roster (${dispatchedCount})`,
+          );
+        }
+        config.minimumReadyChildren = minimumReadyChildren;
+      }
       // Per-node VENDOR PIN declared on the node config
       // (`graph.addNode(n, { ...node, agent: 'claude' })`). The RUNTIME already
       // honours it as the highest-precedence per-node vendor pin (node.ts:
       // `this.config.agent ?? config.agents[name]`), but it was never
       // SERIALIZED — so the dashboard's model-node renderer, which reads
-      // `cfg.agent` to draw a LOCKED disc, could not see a template's pin and
-      // showed an interactive picker for a vendor the operator cannot actually
-      // change. Whitelisted here (display-only, like `description`/`skills`) so
-      // the locked disc is drawn from the DECLARATION — no per-agent branch, no
-      // renderer change. Guarded: a node with no pin gets no `config.agent` key,
-      // so every existing graph serializes byte-identically except the handful
-      // that genuinely pin a node's vendor (which SHOULD read as locked).
+      // `cfg.agent` to constrain a node's model picker to the declared provider,
+      // could not see a template's pin and offered models the runtime could
+      // never use. Whitelisted here (display-only, like `description`/`skills`)
+      // so renderers can show provider identity while still allowing a concrete
+      // model choice within that provider. Guarded: a node with no pin gets no
+      // `config.agent` key, so existing unpinned graphs remain byte-identical.
       if (typeof node?.config?.agent === 'string' && node.config.agent.trim()) {
         config.agent = node.config.agent.trim();
       }

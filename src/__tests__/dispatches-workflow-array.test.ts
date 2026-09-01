@@ -59,3 +59,40 @@ describe('dispatchesWorkflow serialization', () => {
     expect(s.nodeConfigs.child.dispatchesWorkflow).toBe('ticket-triage');
   });
 });
+
+describe('minimumReadyChildren serialization', () => {
+  it('keeps an N-of-M readiness threshold beside the normalized roster', () => {
+    const graph = new WorkflowGraph();
+    graph.addNode('council', {
+      name: 'council', _isCustomCode: true,
+      dispatchesWorkflow: ['claude', 'codex', 'gemini'],
+      minimumReadyChildren: 2,
+    } as any);
+    graph.setEntryPoint('council');
+    const cfg = graph.serialize().nodeConfigs.council;
+    expect(cfg.dispatchesWorkflow).toEqual(['claude', 'codex', 'gemini']);
+    expect(cfg.minimumReadyChildren).toBe(2);
+  });
+
+  it('rejects a threshold larger than the node\'s declared roster', () => {
+    const graph = new WorkflowGraph();
+    graph.addNode('bad', {
+      name: 'bad', _isCustomCode: true,
+      dispatchesWorkflow: ['claude', 'codex'],
+      minimumReadyChildren: 3,
+    } as any);
+    graph.setEntryPoint('bad');
+    expect(() => graph.serialize()).toThrow(/minimumReadyChildren \(3\).*roster \(2\)/);
+  });
+
+  it.each([0, -1, 1.5, '2'])('rejects an invalid threshold: %p', (minimumReadyChildren) => {
+    const graph = new WorkflowGraph();
+    graph.addNode('bad', {
+      name: 'bad', _isCustomCode: true,
+      dispatchesWorkflow: ['claude', 'codex'],
+      minimumReadyChildren,
+    } as any);
+    graph.setEntryPoint('bad');
+    expect(() => graph.serialize()).toThrow(/minimumReadyChildren must be a positive integer/);
+  });
+});
