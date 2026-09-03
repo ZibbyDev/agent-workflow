@@ -212,6 +212,19 @@ describe('dispatchSubgraph — sync mode', () => {
     expect(triggerBody.resultPath).toBe('audit.score');
   });
 
+  it('optionally returns the exact child execution ID with the projected output', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'child-exact' } }))
+      .mockResolvedValueOnce(mockResponse({
+        json: { data: { status: 'completed', finalState: { audit: { score: 99 } } } },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(dispatchSubgraph('deep-audit', {
+      output: 'audit', includeExecutionMetadata: true, pollIntervalMs: 1,
+    })).resolves.toEqual({ executionId: 'child-exact', output: { score: 99 } });
+  });
+
   it('does not send a resultPath for a function extractor', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse({ json: { jobId: 'c' } }))

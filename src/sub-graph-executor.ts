@@ -158,6 +158,11 @@ function resolveOutput(finalState, output) {
   return finalState;
 }
 
+function resolvedDispatch(executionId, finalState, output, includeExecutionMetadata) {
+  const value = resolveOutput(finalState, output);
+  return includeExecutionMetadata ? { executionId, output: value } : value;
+}
+
 /**
  * Dispatch `workflowName` as a child of the currently-running execution.
  *
@@ -191,10 +196,16 @@ function resolveOutput(finalState, output) {
  *   On the HTTP path, a string is also sent as `resultPath` so the
  *   control plane can persist only that declared result before applying
  *   its final-state size cap. Function extractors remain local-only.
+ * @param {boolean} [options.includeExecutionMetadata=false]
+ *   Sync mode only. Return `{ executionId, output }`, where `output` is the
+ *   same projected value this call would otherwise return. This exposes the
+ *   child identity the dispatcher already owns without making callers infer
+ *   it from process-global environment or query the execution list.
  *
  * @returns {Promise<any>}
  *   async: `{ jobId, status: 'accepted' }`
- *   sync : the child's final state (or `getPath(state, output)`)
+ *   sync : the child's final state (or `getPath(state, output)`), optionally
+ *          wrapped as `{ executionId, output }`
  *
  * @throws {Error}
  *   - Network / 5xx errors from the trigger endpoint
@@ -276,14 +287,16 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   ) {
     try {
       logger.debug(`[sub-graph] trying in-process for '${workflowName}'`);
-      const { finalState } = await runInProcessSubgraph(workflowName, {
+      const { finalState, executionId } = await runInProcessSubgraph(workflowName, {
         input: options.input,
         conversationId: options.conversationId,
         signal: options.signal,
         parentAgent: options.parentAgent,
         timeoutMs,
       });
-      const extracted = resolveOutput(finalState, options.output);
+      const extracted = resolvedDispatch(
+        executionId, finalState, options.output, options.includeExecutionMetadata === true,
+      );
       logger.info(`[sub-graph] '${workflowName}' completed in-process`);
       return extracted;
     } catch (e) {
@@ -520,7 +533,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
         throw err;
       }
       const finalState = exec?.finalState || exec?.state || {};
-      const extracted = resolveOutput(finalState, options.output);
+      const extracted = resolvedDispatch(
+        jobId, finalState, options.output, options.includeExecutionMetadata === true,
+      );
       logger.info(`[sub-graph] '${workflowName}' (${jobId}) completed after ${pollCount} polls`);
       return extracted;
     }

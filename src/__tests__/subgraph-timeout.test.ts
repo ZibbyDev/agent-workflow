@@ -282,6 +282,20 @@ describe('dispatchSubgraph — the budget REACHES the in-process path', () => {
     const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes('/trigger'))).toBe(false);
   });
+
+  it('returns the in-process child ID with the same projected output when requested', async () => {
+    const finalizes: any[] = [];
+    mockBeginFinalize('child-metadata', finalizes);
+    registry.register('metadata-child', class {
+      buildGraph() {
+        return { run: async () => ({ success: true, state: { answer: { ok: true } } }) };
+      }
+    });
+
+    await expect(dispatchSubgraph('metadata-child', {
+      output: 'answer', includeExecutionMetadata: true,
+    })).resolves.toEqual({ executionId: 'child-metadata', output: { ok: true } });
+  });
 });
 
 describe('subgraphTimeoutError — ONE shape for both dispatch paths', () => {

@@ -243,6 +243,20 @@ g.addNode('audit', {
 });
 ```
 
+When a custom fan-out node also needs to persist an exact reference to the
+child execution, the direct dispatcher can return identity with the same
+projected value:
+
+```js
+const { executionId, output } = await dispatchSubgraph('deep-audit', {
+  input: { ticketId },
+  output: 'auditResult',
+  includeExecutionMetadata: true,
+});
+```
+
+This is synchronous-only metadata; async dispatch already returns `jobId`.
+
 **Errors are typed** so parents can branch:
 
 | `err.code` | When |
