@@ -1749,6 +1749,15 @@ export class WorkflowGraph {
           // state._signal.aborted. In either case, exit cleanly with the
           // canonical stop shape rather than throwing as a hard failure.
           if (internalAbortController.signal.aborted) {
+            // Close the node's box FIRST. This return used to skip
+            // nodeComplete/nodeFailed, so the timeline's stdout interceptor
+            // stayed installed for the life of the process — every later
+            // turn in a long-lived runtime (the self-host Copilot container)
+            // printed one more `│ ` per stopped turn, and its stderr lines
+            // arrived triple-guttered where the log readers no longer
+            // recognised them. Measured on a box: two superseded turns →
+            // `│ │ │ [tool-broker] …` on every turn after.
+            timeline.nodeStopped(currentNode, { duration });
             timeline.step('Workflow stopped externally');
             return {
               success: true,

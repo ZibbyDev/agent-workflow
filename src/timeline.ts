@@ -98,6 +98,8 @@ class Timeline {
   _origStderrWrite?: any;
   _origStdoutWrite?: any;
   _outState?: any;
+  _prevStdoutWrite?: any;
+  _prevStderrWrite?: any;
   constructor() {
     this._currentNode = null;
     this._origStdoutWrite = null;
@@ -115,6 +117,12 @@ class Timeline {
   }
 
   _startIntercepting() {
+    // Keep the EXACT previous writers to put back (identity, not a bound copy):
+    // the leak test pins `process.stdout.write` back to the very function it
+    // was, and a host that installed its own tee (the self-host runtime's
+    // turn-log capture) gets its own function back, not a wrapper of it.
+    this._prevStdoutWrite = process.stdout.write;
+    this._prevStderrWrite = process.stderr.write;
     this._origStdoutWrite = process.stdout.write.bind(process.stdout);
     this._origStderrWrite = process.stderr.write.bind(process.stderr);
 
@@ -132,16 +140,18 @@ class Timeline {
       if (this._outState && !this._outState.lineStart) {
         this._origStdoutWrite('\n');
       }
-      process.stdout.write = this._origStdoutWrite;
+      process.stdout.write = this._prevStdoutWrite || this._origStdoutWrite;
     }
     if (this._origStderrWrite) {
       if (this._errState && !this._errState.lineStart) {
         this._origStderrWrite('\n');
       }
-      process.stderr.write = this._origStderrWrite;
+      process.stderr.write = this._prevStderrWrite || this._origStderrWrite;
     }
     this._origStdoutWrite = null;
     this._origStderrWrite = null;
+    this._prevStdoutWrite = null;
+    this._prevStderrWrite = null;
   }
 
   _rawWrite(msg) {
@@ -224,6 +234,19 @@ class Timeline {
   }
 
   nodeStart(name) {
+    // ONE interceptor at a time — and a node that starts while the previous
+    // one's interceptor is still installed has found a leak, not a nesting.
+    // `_startIntercepting` saves whatever `process.stdout.write` currently is
+    // as "original"; if that is already our wrapper, every later restore only
+    // ever gets back to the wrapper, and the process prints `│ │ ` (then
+    // `│ │ │ `) in front of every line for the rest of its life. The engine
+    // never runs two nodes at once, so the only way here is a node that ended
+    // without nodeComplete/nodeFailed/nodeStopped — say so, and unwrap first.
+    if (this._origStdoutWrite || this._origStderrWrite) {
+      // eslint-disable-next-line no-console
+      console.warn(`[timeline] node '${name}' started while '${this._currentNode || '?'}' still had the stdout interceptor installed — a node ended without closing its box; unwrapping`);
+      this._stopIntercepting();
+    }
     this._currentNode = name;
     this._emitGraphLogMarker({ phase: 'node_begin', node: name });
     this._rawWrite(`${PIPE_START} ${name}`);
@@ -232,6 +255,7 @@ class Timeline {
 
   nodeComplete(name, opts: any = {}) {
     this._stopIntercepting();
+    this._currentNode = null;
     const { duration, details } = opts;
     if (details) {
       for (const d of details) {
@@ -246,10 +270,27 @@ class Timeline {
 
   nodeFailed(name, error, opts: any = {}) {
     this._stopIntercepting();
+    this._currentNode = null;
     const { duration } = opts;
     const durationStr = duration ? chalk.dim(` ${formatDuration(duration)}`) : '';
     this._rawWrite(`${DOT_FAIL} ${chalk.red(error)}`);
     this._rawWrite(`${PIPE_END} ${chalk.red('failed')}${durationStr}`);
+    this._emitGraphLogMarker({ phase: 'node_end', node: name });
+    this._rawWrite('');
+  }
+
+  /**
+   * The node was cut short by a deliberate stop (external abort / stop file).
+   * Not a failure — no red line — but the box MUST still close: this is the
+   * third way out of a node, and the one that used to leave the stdout
+   * interceptor installed (see nodeStart).
+   */
+  nodeStopped(name, opts: any = {}) {
+    this._stopIntercepting();
+    this._currentNode = null;
+    const { duration } = opts;
+    const durationStr = duration ? chalk.dim(` ${formatDuration(duration)}`) : '';
+    this._rawWrite(`${PIPE_END} ${chalk.dim('stopped')}${durationStr}`);
     this._emitGraphLogMarker({ phase: 'node_end', node: name });
     this._rawWrite('');
   }
