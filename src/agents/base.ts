@@ -58,6 +58,36 @@ export class AgentStrategy {
     throw new Error(`${this.constructor.name}.canHandle() must be implemented`);
   }
 
+  /**
+   * Do whatever ASYNCHRONOUS work this strategy needs before canHandle() can
+   * answer truthfully. Called by invokeAgent() on the REQUESTED strategy, once,
+   * immediately before the canHandle() gate.
+   *
+   * WHY THIS HOOK EXISTS
+   * ────────────────────
+   * canHandle() is a synchronous gate and must stay one — it is called from
+   * getAgentStrategy(), which is synchronous public API used by templates and
+   * tests. But a strategy whose engine is DELIVERED rather than installed (a
+   * sha256-pinned binary fetched on demand instead of baked into an image)
+   * cannot answer "am I available" without doing async work first. Splitting it
+   * — async prepare, then sync gate — is what lets a lazily-delivered engine
+   * pass the same gate, unchanged, instead of making every caller of
+   * getAgentStrategy() async.
+   *
+   * CONTRACT
+   *   - Default is a NO-OP. A strategy with nothing to prepare overrides nothing.
+   *   - Idempotent: called on every invocation, must be cheap when already done.
+   *   - THROWS rather than returning false. A preparation that fails means this
+   *     agent cannot run, and the error must say why — it must never be
+   *     swallowed into "unavailable", because the next thing a caller does with
+   *     "unavailable" could be to run a DIFFERENT engine, which for an agent
+   *     pinned to a vendor is a silently wrong answer rather than a failure.
+   *
+   * @param {object} [context]
+   * @returns {Promise<void>}
+   */
+  async prepare(_context: any = {}) { /* no-op by default */ }
+
   getName()        { return this.name; }
   getDescription() { return this.description; }
   getPriority()    { return this.priority; }

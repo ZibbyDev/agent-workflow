@@ -162,9 +162,35 @@ export function resolveInvocationExtras({ options = {}, stateView = {}, context 
   };
 }
 
-export function getAgentStrategy(context: any = {}) {
+/**
+ * The engine this context is asking for, by name, WITHOUT running the
+ * availability gate. One spelling of the precedence chain, so the async
+ * prepare() step below and the sync gate in getAgentStrategy() can never pick
+ * different agents (a second reading of this chain would be a TWO-PLACES bug
+ * that only shows up when someone sets AGENT_TYPE and state.agentType to
+ * different vendors).
+ */
+function requestedAgentName(context: any = {}) {
   const { state = {}, preferredAgent = null } = context;
-  const requested = preferredAgent || state.agentType || process.env.AGENT_TYPE;
+  return preferredAgent || state.agentType || process.env.AGENT_TYPE;
+}
+
+/**
+ * Run the requested strategy's async prepare() hook, before the sync
+ * canHandle() gate sees it. See AgentStrategy.prepare() for why the split
+ * exists. A strategy that is not registered, or has nothing to prepare, is a
+ * no-op here — the unknown-agent error still comes from getAgentStrategy(), in
+ * one place, with the list of what IS registered.
+ */
+export async function prepareAgentStrategy(context: any = {}) {
+  const requested = requestedAgentName(context);
+  if (!requested) return;
+  const strategy: any = _strategies.find(s => s.getName() === requested);
+  if (strategy && typeof strategy.prepare === 'function') await strategy.prepare(context);
+}
+
+export function getAgentStrategy(context: any = {}) {
+  const requested = requestedAgentName(context);
 
   if (!requested) {
     const available = _strategies.map(s => s.getName()).join(', ') || 'none registered';
@@ -212,6 +238,11 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     : (context.state || {});
   const ctx: any = { ...context, state: stateView };
 
+  // ENSURE, then CHECK. An engine that is delivered on demand rather than baked
+  // into the image has to materialize before the synchronous gate below can say
+  // it is available. A failure here THROWS (it never becomes "unavailable"), so
+  // an agent pinned to one vendor can never quietly run on another.
+  await prepareAgentStrategy(ctx);
   const strategy = getAgentStrategy(ctx);
 
   const config = stateView.config || options.config || {};
