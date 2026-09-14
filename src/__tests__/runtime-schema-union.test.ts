@@ -14,8 +14,8 @@
  * `this.inputSchema.merge(...)`. For a discriminated union `.merge` is
  * undefined → it threw → composition fell through to the (usually absent)
  * legacy `stateSchema`, so a union input's runtime validation was SKIPPED
- * entirely. This pins down that unions are now validated, the object path is
- * unchanged, and a non-schema/throwing input falls back gracefully.
+ * entirely. This pins down that unions and refined objects are validated, the
+ * object path is unchanged, and an uncomposable input fails loud.
  */
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
@@ -140,33 +140,60 @@ describe('_runtimeSchema() — z.object input (regression: original path unchang
   });
 });
 
-describe('_runtimeSchema() — graceful fallback (tolerant)', () => {
-  it('a non-zod input that lacks .merge AND .and falls back to stateSchema, no throw', () => {
-    const legacyState = z.object({ foo: z.string() });
-    const bogusInput = { notASchema: true }; // no .merge, no .and
-    const ctx = z.object({ a: z.string().optional() });
-    const g = makeGraph();
-    g.inputSchema = bogusInput;
-    g.contextSchema = ctx;
-    g.stateSchema = legacyState;
-    let schema;
-    expect(() => { schema = g._runtimeSchema(); }).not.toThrow();
-    expect(schema).toBe(legacyState);
+describe('_runtimeSchema() — z.object input WITH refinements (zod v4: .merge throws)', () => {
+  // Shape of ai-council's input: cross-field rule in superRefine. Under zod v4
+  // `.merge` throws on a refined object; the old catch-all swallowed that and
+  // skipped input validation entirely, so an invalid roster started a run.
+  const refinedInput = z.object({
+    claudeSeats: z.number().int().min(0).default(1),
+    codexSeats: z.number().int().min(0).default(1),
+  }).superRefine((v, ctx) => {
+    if ([v.claudeSeats, v.codexSeats].filter((n) => n > 0).length < 2) {
+      ctx.addIssue({ code: 'custom', path: ['claudeSeats'], message: 'need at least 2 providers' });
+    }
+  });
+  const ctx = z.object({ workspace: z.string().optional(), agentType: z.string().default('cursor') });
+
+  it('keeps the refinement — rejects a payload the refinement forbids', () => {
+    const g = makeGraph().setInputSchema(refinedInput).setContextSchema(ctx);
+    const r = g._runtimeSchema().safeParse({ claudeSeats: 2, codexSeats: 0 });
+    expect(r.success).toBe(false);
+    expect(r.error.issues.map((i) => i.message)).toContain('need at least 2 providers');
   });
 
-  it('an input whose composition THROWS falls back to stateSchema, no crash', () => {
-    const legacyState = z.object({ foo: z.string() });
-    const ctx = z.object({ a: z.string().optional() });
-    const throwingInput = {
-      and() { throw new Error('boom'); }, // looks composable, but blows up
-    };
+  it('accepts a valid payload and applies context defaults', () => {
+    const g = makeGraph().setInputSchema(refinedInput).setContextSchema(ctx);
+    const r = g._runtimeSchema().safeParse({});
+    expect(r.success).toBe(true);
+    expect(r.data.agentType).toBe('cursor');
+  });
+
+  it('end-to-end: graph.run() REJECTS before any node runs', async () => {
+    let executed = false;
+    const g = makeGraph().setInputSchema(refinedInput).setContextSchema(ctx);
+    g.addNode('probe', { _isCustomCode: true, execute: async () => { executed = true; return { ok: true }; } });
+    g.setEntryPoint('probe');
+    const fakeAgent = { name: 'fake', async run() { return { raw: '{}', structured: {} }; } };
+    await expect(g.run(fakeAgent, { claudeSeats: 2, codexSeats: 0 })).rejects.toThrow(/need at least 2 providers/);
+    expect(executed).toBe(false);
+  });
+});
+
+describe('_runtimeSchema() — fail loud, never skip validation', () => {
+  it('a non-zod input that lacks every composition method THROWS', () => {
     const g = makeGraph();
-    g.inputSchema = throwingInput;
-    g.contextSchema = ctx;
-    g.stateSchema = legacyState;
-    let schema;
-    expect(() => { schema = g._runtimeSchema(); }).not.toThrow();
-    expect(schema).toBe(legacyState);
+    g.inputSchema = { notASchema: true };
+    g.contextSchema = z.object({ a: z.string().optional() });
+    g.stateSchema = z.object({ foo: z.string() });
+    expect(() => g._runtimeSchema()).toThrow(/could not be validated/);
+  });
+
+  it('an input whose every composition throws THROWS with each reason', () => {
+    const g = makeGraph();
+    g.inputSchema = { and() { throw new Error('boom'); } };
+    g.contextSchema = z.object({ a: z.string().optional() });
+    g.stateSchema = z.object({ foo: z.string() });
+    expect(() => g._runtimeSchema()).toThrow(/and: boom/);
   });
 
   it('no input and no context returns the legacy stateSchema', () => {

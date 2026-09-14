@@ -286,25 +286,40 @@ export class WorkflowGraph {
    *     the parsed result. This is the agent-native multi-scenario shape
    *     (e.g. sentry-triage's `z.discriminatedUnion('trigger', [...])`).
    *
-   * Tolerant by design: if the input schema is neither shape we recognise, or
-   * composition throws for any reason, we fall back to the legacy stateSchema
-   * (or null) rather than crashing a run over a validation-wiring issue.
+   *   - z.object WITH refinements (`.superRefine`/`.refine`) under zod v4 →
+   *     `.merge` exists but THROWS (".merge() cannot be used on object schemas
+   *     containing refinements"). Composed with `.safeExtend(context.shape)`,
+   *     which keeps the refinements. (zod v3 wraps a refined object in
+   *     ZodEffects, which has no `.merge` and takes the intersection path.)
+   *
+   * Fail loud: a declared input schema that cannot be composed THROWS. The old
+   * tolerant fallback to the (usually absent) legacy stateSchema skipped input
+   * validation entirely and silently — twice: first for union inputs, then for
+   * ai-council's refined object input, whose invalid roster started a run that
+   * ended "completed" with zero contributions.
    */
   _runtimeSchema() {
     if (this.inputSchema && this.contextSchema) {
-      try {
-        // Object input: the original `.merge` path. Detected by the presence
-        // of `.merge` (a z.object method); unions don't have it.
-        if (typeof this.inputSchema.merge === 'function') {
-          return this.inputSchema.merge(this.contextSchema);
+      const input = this.inputSchema;
+      const context = this.contextSchema;
+      const attempts: Array<[string, () => any]> = [
+        ['merge', () => input.merge(context)],
+        ['safeExtend', () => input.safeExtend(context.shape)],
+        ['and', () => input.and(context)],
+      ];
+      const failures = [];
+      for (const [method, compose] of attempts) {
+        if (typeof input[method] !== 'function') continue;
+        try {
+          return compose();
+        } catch (error) {
+          failures.push(`${method}: ${error?.message || error}`);
         }
-        // Union input (discriminated or plain): compose via intersection so
-        // BOTH the matched variant and the context object are validated, and
-        // context defaults still apply to the parsed result.
-        if (typeof this.inputSchema.and === 'function') {
-          return this.inputSchema.and(this.contextSchema);
-        }
-      } catch { /* fall through to legacy */ }
+      }
+      throw new Error(
+        'The workflow input schema cannot be combined with its context schema, so run input could not be validated'
+        + (failures.length ? ` (${failures.join('; ')})` : ' (input schema has no merge/safeExtend/and — is it a zod schema?)'),
+      );
     }
     if (this.inputSchema && !this.contextSchema) return this.inputSchema;
     return this.stateSchema;
