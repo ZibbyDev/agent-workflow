@@ -15,6 +15,7 @@
 import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
+import { currentRunEffort } from './exec-context.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -123,7 +124,15 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
  * place to drift from it.
  *   nodeConfigEffort (nodeConfigOverrides[node].effort — the dashboard's pick)
  *   > options.effort (a node passing its own, e.g. a cheap triage pass)
- *   > EFFORT env (the run-level default the executor stamps)
+ *   > run-level effort (currentRunEffort(): what the DISPATCHER of this run
+ *     asked for — dispatchSubgraph/trigger `effort` — else the agent's
+ *     deployed EFFORT env default)
+ * Why a dispatcher's pick sits BELOW a node's own option: the dispatcher picks
+ * for the whole run from outside (it sees the ticket, not the graph), while a
+ * node's option is its author's judgement about THAT step ("this is a cheap
+ * classification pass"). Specific beats general — the same order the model
+ * chain uses (options.model above the run's MODEL). The operator's pin is the
+ * most specific of all and always wins.
  * Returns null when nobody said anything, which means "the vendor's own
  * default" — never a value invented here.
  * VALIDATED, not passed through: the levels are a closed set the CLIs accept
@@ -131,6 +140,24 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
  * a vendor is an opaque runtime error rather than a visible bad pick.
  */
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * The ONE effort validator — every door that ACCEPTS an effort (a dispatch, a
+ * tool argument) calls this, so the closed set is spelled once.
+ *   absent / empty           → { ok: true, effort: null }
+ *   a known level (any case) → { ok: true, effort: '<level>' }
+ *   anything else            → { ok: false, message }
+ */
+export function normalizeEffort(raw: any): { ok: boolean; effort: string | null; message?: string } {
+  if (raw === undefined || raw === null) return { ok: true, effort: null };
+  if (typeof raw !== 'string') return { ok: false, effort: null, message: `effort must be one of: ${EFFORT_LEVELS.join(', ')}` };
+  const v = raw.trim().toLowerCase();
+  if (!v) return { ok: true, effort: null };
+  if (EFFORT_LEVELS.indexOf(v) === -1) {
+    return { ok: false, effort: null, message: `unknown effort "${raw.slice(0, 40)}" — expected one of: ${EFFORT_LEVELS.join(', ')}` };
+  }
+  return { ok: true, effort: v };
+}
 
 export function resolveInvocationEffort({ options = {}, envEffort, nodeConfigEffort }: any = {}) {
   const pick = [nodeConfigEffort, options.effort, envEffort]
@@ -266,7 +293,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   const nodeConfigEffort = (!nodePinAgent || nodePinAgent === strategy.name) ? nodePin.effort : null;
   const effort = resolveInvocationEffort({
     options,
-    envEffort: process.env.EFFORT,
+    envEffort: currentRunEffort(),
     nodeConfigEffort,
   });
 

@@ -37,6 +37,7 @@
 import { logger } from './logger.js';
 import { runInProcessSubgraph, SubgraphFallback, subgraphTimeoutError } from './in-process-subgraph.js';
 import { getExecContext } from './exec-context.js';
+import { normalizeEffort } from './strategy-registry.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
@@ -196,6 +197,15 @@ function resolvedDispatch(executionId, finalState, output, includeExecutionMetad
  *   On the HTTP path, a string is also sent as `resultPath` so the
  *   control plane can persist only that declared result before applying
  *   its final-state size cap. Function extractors remain local-only.
+ * @param {string} [options.effort]
+ *   Reasoning effort the CHILD run's model invocations use — one of
+ *   EFFORT_LEVELS (`low|medium|high|xhigh|max`). It becomes the child's
+ *   RUN-LEVEL effort: below the operator's per-node pin and a node's own
+ *   `options.effort`, above the child agent's deployed default (see
+ *   resolveInvocationEffort). Omit for "the child's default". An unknown value
+ *   THROWS (`code: 'INVALID_EFFORT'`) before anything is started — a bad pick
+ *   must be visible to the caller, not silently become the default. Vendors
+ *   with no effort control (gemini) log that they ignore it.
  * @param {boolean} [options.includeExecutionMetadata=false]
  *   Sync mode only. Return `{ executionId, output }`, where `output` is the
  *   same projected value this call would otherwise return. This exposes the
@@ -232,6 +242,15 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // backend's per-dispatch quota gate that's sufficient defense against
   // accidental + most-malicious recursion.
   const parentCtx = getExecContext();
+
+  // ── Effort: validated ONCE, carried by BOTH paths ───────────────────────
+  const effortCheck = normalizeEffort(options.effort);
+  if (!effortCheck.ok) {
+    const e: any = new Error(`dispatchSubgraph('${workflowName}'): ${effortCheck.message}`);
+    e.code = 'INVALID_EFFORT';
+    throw e;
+  }
+  const effort = effortCheck.effort;
 
   // ── Auto-supply parentAgent + signal from the running node's context ────
   // A hand-rolled `dispatchSubgraph(slug, { input })` inside a custom execute
@@ -293,6 +312,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
         signal: options.signal,
         parentAgent: options.parentAgent,
         timeoutMs,
+        ...(effort ? { effort } : {}),
       });
       const extracted = resolvedDispatch(
         executionId, finalState, options.output, options.includeExecutionMetadata === true,
@@ -335,9 +355,10 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       : {}),
     ...(options.participantBindingId ? { participantBindingId: options.participantBindingId } : {}),
     ...(options.protocolId ? { protocolId: options.protocolId } : {}),
+    ...(effort ? { effort } : {}),
   };
 
-  logger.info(`[sub-graph] dispatching '${workflowName}' (${options.async ? 'async' : 'sync'}) from parent ${parentExecutionId || '<none>'}`);
+  logger.info(`[sub-graph] dispatching '${workflowName}' (${options.async ? 'async' : 'sync'}) from parent ${parentExecutionId || '<none>'}${effort ? ` at effort ${effort}` : ''}`);
 
   // A FRESH deadline for THIS dispatch — see the budget note up top for why a
   // parallel fan-out must not share one.

@@ -612,6 +612,8 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
       childWorkflowType: workflowName,
       input: options.input || {},
       ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+      // Recorded on the child's execution row, same as the HTTP trigger.
+      ...(options.effort ? { effort: options.effort } : {}),
     },
   });
 
@@ -776,6 +778,12 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
           parentExecutionId: parentCtx.executionId,
           conversationId: options.conversationId !== undefined ? options.conversationId : parentCtx.conversationId,
           dispatchMode: 'inprocess',
+          // The child's RUN-LEVEL effort (currentRunEffort reads it). Always
+          // named — null included — so the PARENT's process EFFORT env can
+          // never answer for the child: the dispatcher's pick, else the child
+          // row's own deployed EFFORT, else nothing. Same answer a container
+          // child gets from its own env.
+          effort: options.effort || (childEnv && typeof childEnv.EFFORT === 'string' ? childEnv.EFFORT : null),
         },
         () => childGraph.run(options.parentAgent, childInitialState, {
           signal: deadline.signal,

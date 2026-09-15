@@ -26,7 +26,15 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-const _als = new AsyncLocalStorage();
+// Shared on globalThis for the same reason the strategy registry is: a workflow
+// bundle can load several copies of this package (graph.mjs's import, and
+// @zibby/core's transitive one). A module-level store would give each copy its
+// own ALS, so a scope entered by the engine's copy (an in-process child's
+// executionId / effort) would be invisible to code reading through core's copy
+// — which is exactly where a template code node's invokeAgent runs.
+const ALS_KEY = Symbol.for('@zibby/agent-workflow.exec-context');
+if (!globalThis[ALS_KEY]) globalThis[ALS_KEY] = new AsyncLocalStorage();
+const _als: AsyncLocalStorage<any> = globalThis[ALS_KEY];
 
 /**
  * Read the active execution context. Returns a frozen object so callers
@@ -38,7 +46,15 @@ const _als = new AsyncLocalStorage();
  *   depth: number,
  *   conversationId: string | null,
  *   dispatchMode: 'cold'|'warm'|'inprocess'|null,
+ *   effort: string|null,
  * }}
+ *
+ * `effort` is the RUN-LEVEL reasoning effort a dispatcher asked this run to use
+ * (dispatchSubgraph's `effort`). It is only ever set on an in-process child
+ * scope (`effortScoped: true`, where null means "nobody picked" and the process
+ * env — the parent's — is NOT consulted); a container run carries the same
+ * pick as the `EFFORT` env instead.
+ * Read it through currentRunEffort(), never directly.
  */
 export function getExecContext(): any {
   const store = _als.getStore();
@@ -54,6 +70,7 @@ export function getExecContext(): any {
     depth: 0,
     conversationId: process.env.ZIBBY_CONVERSATION_ID || null,
     dispatchMode: process.env.DISPATCH_MODE || null,
+    effort: null,
     agent: null,
     signal: null,
   });
@@ -84,6 +101,12 @@ export function runInContext(ctx, fn) {
     depth: (parent.depth || 0) + (ctx.executionId !== parent.executionId ? 1 : 0),
     conversationId: ctx.conversationId !== undefined ? ctx.conversationId : (parent.conversationId ?? null),
     dispatchMode: ctx.dispatchMode ?? null,
+    // A child scope that names its effort (even null = "no pick") OWNS it —
+    // the process env belongs to the PARENT run, so it must not answer for the
+    // child (parity with a container child, which never sees the parent's
+    // EFFORT). A scope that says nothing keeps the surrounding one.
+    effort: ctx.effort !== undefined ? (ctx.effort || null) : (parent.effort ?? null),
+    effortScoped: ctx.effort !== undefined ? true : (parent.effortScoped === true),
     // agent/signal are the live run objects; inherit the parent's unless the
     // caller overrides — so a child scope keeps seeing an agent/signal for its
     // own dispatchSubgraph calls (see withAgentContext).
@@ -132,9 +155,23 @@ export function withRootContext(ctx, fn) {
       depth: 0,
       conversationId: ctx.conversationId ?? null,
       dispatchMode: ctx.dispatchMode ?? 'cold',
+      effort: ctx.effort ?? null,
       agent: ctx.agent ?? null,
       signal: ctx.signal ?? null,
     }),
     fn,
   );
+}
+
+/**
+ * The RUN-LEVEL reasoning effort for whatever run this code is executing in:
+ * the in-process child scope's pick when a dispatcher named one, else the
+ * `EFFORT` env the platform stamps on a container run (the dispatcher's pick,
+ * or the agent's deployed default). Unvalidated here — resolveInvocationEffort
+ * validates every layer the same way.
+ */
+export function currentRunEffort(): string | null {
+  const store: any = _als.getStore();
+  if (store && store.effortScoped === true) return store.effort || null;
+  return process.env.EFFORT || null;
 }
