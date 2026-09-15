@@ -904,6 +904,22 @@ export class WorkflowGraph {
         }
         if (aliases.length > 0) config.uses = aliases;
       }
+      // `supervisionEntry: true` — THIS NODE IS WHERE MEMBER NOTICES ARRIVE.
+      //
+      // A fleet's manager has one step that drains its mailbox and hands the
+      // contents to the model (board-runner's briefing node). Declaring it here
+      // is how the PLATFORM learns that this agent can be TOLD something:
+      // at dispatch the backend copies the answer onto each run row
+      // (backend/src/services/run-supervision.js) and the run watchdog then
+      // reads that one field instead of guessing who to notify when a member
+      // wedges. Display-only for the canvas; nothing in the engine reads it.
+      //
+      // Whitelisted because this block is an allowlist (see `uses` above) —
+      // without this line the declaration compiles, deploys and reaches
+      // nothing.
+      if (node?.config?.supervisionEntry === true || (node as any)?.supervisionEntry === true) {
+        config.supervisionEntry = true;
+      }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
     }
 
