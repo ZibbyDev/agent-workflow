@@ -47,7 +47,20 @@ const _als: AsyncLocalStorage<any> = globalThis[ALS_KEY];
  *   conversationId: string | null,
  *   dispatchMode: 'cold'|'warm'|'inprocess'|null,
  *   effort: string|null,
+ *   nodeId: string|null,
  * }}
+ *
+ * `nodeId` is the graph node THIS run is executing right now — the key of the
+ * engine's `this.nodes` Map, verbatim, the same string the progress reporter
+ * puts on the wire as `step.name`. The engine publishes it around every node's
+ * execute() (withAgentContext), so a dispatch made from inside a node can name
+ * the node it LEFT FROM without threading a parameter through every call site.
+ * That is the one fact a child run could not otherwise carry: `parentExecutionId`
+ * says WHICH RUN started it, `nodeId` says WHICH LINE it went out on — and a
+ * graph that draws one member under two dispatching nodes needs both to know
+ * which of the two tiles is the one that is busy.
+ * null outside any node scope (a hand-rolled dispatch at top level), and null
+ * on a child scope: a child is not standing on its parent's node.
  *
  * `effort` is the RUN-LEVEL reasoning effort a dispatcher asked this run to use
  * (dispatchSubgraph's `effort`). It is only ever set on an in-process child
@@ -73,6 +86,10 @@ export function getExecContext(): any {
     effort: null,
     agent: null,
     signal: null,
+    // No ALS scope ⇒ nobody told us which node we are on. Never guessed from
+    // env: there is no env that carries it, and a stale one would be worse
+    // than "unknown".
+    nodeId: null,
   });
 }
 
@@ -112,6 +129,11 @@ export function runInContext(ctx, fn) {
     // own dispatchSubgraph calls (see withAgentContext).
     agent: ctx.agent !== undefined ? ctx.agent : (parent.agent ?? null),
     signal: ctx.signal !== undefined ? ctx.signal : (parent.signal ?? null),
+    // A CHILD RUN IS NOT STANDING ON ITS PARENT'S NODE. Inheriting the
+    // surrounding nodeId would make every dispatch the child itself makes
+    // claim the PARENT's node as its origin — the child's own engine
+    // republishes its own node the moment its first node starts.
+    nodeId: ctx.executionId !== parent.executionId ? null : (parent.nodeId ?? null),
   });
   return _als.run(next, fn);
 }
@@ -126,13 +148,20 @@ export function runInContext(ctx, fn) {
  * sub-workflow node form already does. Without it, a hand-rolled dispatch ran
  * the in-process child with no agent (LLM nodes fail) or fell back to HTTP.
  * Explicitly-passed `parentAgent`/`signal` still win — this only fills the gap.
+ *
+ * `nodeId` rides along for the same reason and on the same wrapper: it is the
+ * node whose execute() this scope surrounds, so a dispatch made from inside it
+ * can record WHICH LINE the child went out on (see getExecContext). Passing it
+ * here rather than adding a second wrapper keeps ONE per-node scope — two would
+ * be two places that must agree about when a node is "current".
  */
-export function withAgentContext(agent, signal, fn) {
+export function withAgentContext(agent, signal, fn, nodeId?: string | null) {
   const parent: any = _als.getStore() || getExecContext();
   const next = Object.freeze({
     ...parent,
     agent: agent ?? parent.agent ?? null,
     signal: signal ?? parent.signal ?? null,
+    nodeId: nodeId !== undefined ? (nodeId || null) : (parent.nodeId ?? null),
   });
   return _als.run(next, fn);
 }
@@ -158,6 +187,7 @@ export function withRootContext(ctx, fn) {
       effort: ctx.effort ?? null,
       agent: ctx.agent ?? null,
       signal: ctx.signal ?? null,
+      nodeId: null,   // the root scope is entered before the first node starts
     }),
     fn,
   );

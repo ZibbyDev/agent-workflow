@@ -609,6 +609,11 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     authToken: env.authToken,
     body: {
       parentExecutionId: parentCtx.executionId,
+      // WHICH LINE this child goes out on — the node this dispatch is made
+      // from. Same fact, same field name, as the HTTP trigger path
+      // (sub-graph-executor getDispatchNodeId); the backend records it on the
+      // child row as `parentNodeId`.
+      ...(parentCtx.nodeId ? { dispatchNodeId: parentCtx.nodeId } : {}),
       childWorkflowType: workflowName,
       input: options.input || {},
       ...(options.conversationId ? { conversationId: options.conversationId } : {}),

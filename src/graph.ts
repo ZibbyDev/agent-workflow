@@ -1767,7 +1767,11 @@ export class WorkflowGraph {
             }, state.getAll(), state);
           }
           return node.execute(nodeContext, state);
-        });
+        // …and WHICH NODE this is, so a dispatch made from inside it records the
+        // line it left by (exec-context nodeId → dispatchSubgraph's
+        // `dispatchNodeId` → the child row's `parentNodeId`). Same wrapper as the
+        // agent/signal publish: one per-node scope, not two.
+        }, currentNode);
 
         const duration = Date.now() - startTime;
         executionLog.push({ node: currentNode, success: result.success, duration, timestamp: new Date().toISOString() });

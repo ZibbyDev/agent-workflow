@@ -132,6 +132,24 @@ function getParentExecutionId() {
 }
 
 /**
+ * WHICH LINE THIS CHILD GOES OUT ON — the graph node this dispatch is being
+ * made from, published by the engine around every node's execute()
+ * (exec-context `nodeId`). The backend records it on the child row as
+ * `parentNodeId`; the graph canvas needs it because one member can be declared
+ * under SEVERAL dispatching nodes, and "the member is busy" cannot say which of
+ * those tiles — or which of those lines — the work actually went down.
+ *
+ * null when nothing published it (a hand-rolled dispatch outside any node, or a
+ * deployed agent still pinned to an engine that predates this). The backend
+ * then falls back to the parent's own in-flight step, and the canvas stays dark
+ * rather than guessing — see backend services/dispatch-origin.js.
+ */
+function getDispatchNodeId(): string | null {
+  const id = getExecContext().nodeId;
+  return typeof id === 'string' && id ? id : null;
+}
+
+/**
  * Resolve the parent's `output:` spec against the child's final state.
  *
  * Three accepted forms:
@@ -346,6 +364,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   const body: any = {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
+    ...(getDispatchNodeId() ? { dispatchNodeId: getDispatchNodeId() } : {}),
     ...(!options.async && typeof options.output === 'string' && options.output.trim()
       ? { resultPath: options.output.trim() }
       : {}),
