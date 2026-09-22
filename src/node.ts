@@ -10,6 +10,7 @@ import { logger } from './logger.js';
 import { timeline } from './timeline.js';
 import { SESSION_INFO_FILE } from './constants.js';
 import { createAttemptBudget, type AttemptDecision } from './failure-class.js';
+import { preferredAgentFor } from './node-vendor.js';
 
 /**
  * ONE place decides what a retry PRINTS and how long it waits — both of the
@@ -278,9 +279,7 @@ export class Node {
         //   node.config.agent  (graph-level: graph.addNode(n, { ..., agent: 'claude' }))
         //   config.agents[name]  (project-level mapping in .zibby.config.js)
         //   state.agentType  (project default selected by getAgentStrategy)
-        const perNodeAgentMap = zibbyConfig.agents || {};
-        const preferredAgent =
-          this.config.agent ?? perNodeAgentMap[this.name] ?? null;
+        const preferredAgent = preferredAgentFor(this.name, this.config, zibbyConfig);
         const agentContext: any = { state: getAllState() };
         if (preferredAgent) agentContext.preferredAgent = preferredAgent;
 

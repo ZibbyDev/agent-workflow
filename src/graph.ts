@@ -15,6 +15,7 @@
 
 import { WorkflowState } from './state.js';
 import { Node } from './node.js';
+import { preferredAgentFor } from './node-vendor.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
 import { runCollaboration } from './collaboration.js';
 import { withAgentContext } from './exec-context.js';
@@ -1689,10 +1690,17 @@ export class WorkflowGraph {
           throw new Error(`No prompt template configured for node '${currentNode}' and no prompt provided in options`);
         }
 
+        // The node's vendor pin — the same reading node.ts makes
+        // (node-vendor.ts), so a code node pinned on the canvas runs on that
+        // vendor instead of the run default. A caller's explicit
+        // `preferredAgent` still wins.
+        const preferredAgent = options.preferredAgent
+          ?? preferredAgentFor(currentNode, this.nodes.get(currentNode)?.config, state.get('config'));
         // boundInvokeAgent already wraps the deadman; just delegate.
         return boundInvokeAgent(finalPrompt, {
           state: state.getAll(),
           images: options.images || [],
+          ...(preferredAgent ? { preferredAgent } : {}),
         }, {
           model: options.model || state.get('model'),
           workspace: state.get('workspace'),
