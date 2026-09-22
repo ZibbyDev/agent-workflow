@@ -218,6 +218,29 @@ describe('strategy-registry', () => {
       expect(captured).toContain('PRIORITY OVERRIDE');
     });
 
+    it('the platform workspace text follows the NODE\'s deny list: rendered for a node that reads files, dropped for one that cannot', async () => {
+      const { registerStrategy, invokeAgent, nodeOverrideInstructions } = await loadFreshRegistry();
+      let captured;
+      registerStrategy(new FakeStrategy('alpha', { invoke: async (prompt) => { captured = prompt; return 'ok'; } }));
+      const nodeConfig = { extraPromptInstructions: 'OVERRIDE_X', workspaceInstructions: 'CHECKOUT_AT_/workspace' };
+
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['WebFetch'] });
+      // Byte-identical to the one field the executor used to write: override, blank line, platform text.
+      expect(captured).toContain('OVERRIDE_X\n\nCHECKOUT_AT_/workspace');
+
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob', 'WebFetch'] });
+      expect(captured).toContain('OVERRIDE_X');
+      expect(captured).not.toContain('CHECKOUT_AT_');
+
+      // Only the platform text and a node with no file access → no block at all.
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: { workspaceInstructions: 'CHECKOUT' } } }, { disallowedTools: ['Bash', 'Read', 'Grep', 'Glob'] });
+      expect(captured).not.toContain('PRIORITY OVERRIDE');
+
+      // Fail-open: no declaration, or a partial one, still reads the checkout.
+      expect(nodeOverrideInstructions({ workspaceInstructions: 'W' }, {})).toBe('W');
+      expect(nodeOverrideInstructions({ workspaceInstructions: 'W' }, { disallowedTools: ['Bash', 'Read'] })).toBe('W');
+    });
+
     it('injects custom prompt + resolves agent when state is a WorkflowState INSTANCE (getAll snapshot), not a plain object', async () => {
       // Guards the state-normalization in invokeAgent: a node may pass the raw
       // WorkflowState instance (data hidden in an internal store, reachable ONLY

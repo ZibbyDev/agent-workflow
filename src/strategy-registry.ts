@@ -101,6 +101,44 @@ export function resolveInvocationModel({ config = {}, options = {}, strategyName
 }
 
 /**
+ * THE TOOLS THROUGH WHICH A NODE LOOKS AT FILES. A node whose declared deny
+ * list (`disallowedTools`) covers every one of them has no working copy it can
+ * read — the manager of a fleet, a classifier that works from tool results —
+ * and a description of the run's checkout is text it pays for on every model
+ * request and cannot act on.
+ */
+export const WORKSPACE_READ_TOOLS = Object.freeze(['Bash', 'Read', 'Grep', 'Glob']);
+
+/** Can a node with this deny list look at the run's files? Fail-open: no
+ * declaration (or a partial one) means yes. PURE. */
+export function nodeReadsWorkspace(disallowedTools: unknown): boolean {
+  const denied = new Set(Array.isArray(disallowedTools) ? disallowedTools.map((t) => String(t)) : []);
+  return !WORKSPACE_READ_TOOLS.every((t) => denied.has(t));
+}
+
+/**
+ * The text a node's PRIORITY OVERRIDE block carries, from its per-run node
+ * config — ONE function, both invokeAgent paths (this engine and @zibby/core's).
+ *
+ *   extraPromptInstructions — the operator's saved per-node prompt override.
+ *                             Always rendered.
+ *   workspaceInstructions   — what the PLATFORM says about this run's working
+ *                             copy (a local project checkout, its mount path).
+ *                             Rendered only when the node can read files
+ *                             (`nodeReadsWorkspace`), so the injection follows
+ *                             the node's own declaration — no per-agent branch.
+ *
+ * For a node that reads files the result is byte-identical to the single
+ * field the executor used to write (override first, platform text after,
+ * joined by a blank line). PURE.
+ */
+export function nodeOverrideInstructions(nodeConfig: any, { disallowedTools }: { disallowedTools?: unknown } = {}): string {
+  const extra = typeof nodeConfig?.extraPromptInstructions === 'string' ? nodeConfig.extraPromptInstructions.trim() : '';
+  const workspace = typeof nodeConfig?.workspaceInstructions === 'string' ? nodeConfig.workspaceInstructions.trim() : '';
+  return [extra, workspace && nodeReadsWorkspace(disallowedTools) ? workspace : ''].filter(Boolean).join('\n\n');
+}
+
+/**
  * The per-invocation PASSTHROUGH options — the fields a strategy needs that are
  * sourced from (in order) the explicit per-call options, the run state, then the
  * node context. ONE implementation, imported by every invokeAgent.
@@ -404,7 +442,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     enrichedPrompt += `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`;
   }
 
-  const extraInstructions = stateView._currentNodeConfig?.extraPromptInstructions?.trim();
+  const extraInstructions = nodeOverrideInstructions(stateView._currentNodeConfig, { disallowedTools: finalOptions.disallowedTools });
   if (extraInstructions) {
     enrichedPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIORITY OVERRIDE — THE FOLLOWING INSTRUCTIONS TAKE PRECEDENCE OVER ALL PREVIOUS CONTENT
