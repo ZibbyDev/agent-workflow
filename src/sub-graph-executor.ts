@@ -440,52 +440,52 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       detail = await settleWithin(triggerResp.text(), triggerDl.signal).catch(() => '');
     }
 
-    // Quota exceeded — the parent workflow burns no further sub-graph
-    // capacity. Surface a typed error so callers (and the activity tab
-    // UI) can distinguish quota from "child rejected my input" or
-    // "service is down". The trigger endpoint returns 429 with a
-    // quotaInfo block when the account is over its limit.
-    if (triggerResp.status === 429) {
-      const q = errJson?.quotaInfo || {};
+    // THE PLATFORM'S OWN WORDS. Every refusal carries what the platform said —
+    // its message verbatim, its `code`, and `retryable` only when it said so —
+    // because the dispatcher (and the person reading its report) acts on THAT.
+    // The status alone is not the reason: a 429 here is an account's in-flight
+    // cap far more often than a quota, and a 400 is a missing key, a member that
+    // cannot run or an undeclared chat entry as often as an input schema. Until
+    // 2026-09-24 every 429 read "blocked by execution quota (?/? on plan
+    // unknown) … monthly cap" and every 400 "rejected input", with the code
+    // dropped — a manager told a person its team was out of quota when one of
+    // its members simply had no API key.
+    const platformCode = typeof errJson?.code === 'string' && errJson.code ? errJson.code : null;
+    const carry = (e: any) => {
+      e.status = triggerResp.status;
+      e.subgraph = workflowName;
+      if (platformCode) e.platformCode = platformCode;
+      if (errJson?.retryable === true) e.retryable = true;
+      return e;
+    };
+
+    // The quota — only when the platform SAYS quota (it answers with a
+    // quotaInfo block then). Typed so callers can tell it from the rest.
+    if (triggerResp.status === 429 && errJson?.quotaInfo) {
+      const q = errJson.quotaInfo;
       const e: any = new Error(
         `Sub-graph '${workflowName}' blocked by execution quota `
-        + `(${q.used ?? '?'}/${q.limit ?? '?'} on plan ${q.planId || 'unknown'}). `
-        + `Sub-workflow runs count toward the same monthly cap as user-triggered runs.`,
+        + `(${q.used ?? '?'}/${q.limit ?? '?'} on plan ${q.planId || 'unknown'}): ${detail}`,
       );
       e.code = 'SUBGRAPH_QUOTA_EXCEEDED';
-      e.status = 429;
-      e.subgraph = workflowName;
       e.quotaInfo = q;
-      throw e;
+      throw carry(e);
     }
 
-    // Schema / input rejection from the trigger gate. Parent passed
-    // input that doesn't satisfy the child's inputSchema (the slice the
-    // trigger caller supplies — runner-injected contextSchema fields
-    // like workspace/tokens are NOT the parent's responsibility).
-    if (triggerResp.status === 400) {
-      const e: any = new Error(
-        `Sub-graph '${workflowName}' rejected input: ${detail}`,
-      );
+    // The child's input schema refused what the parent passed — only when the
+    // platform says which fields (runner-injected contextSchema fields like
+    // workspace/tokens are NOT the parent's responsibility).
+    if (triggerResp.status === 400 && (errJson?.validationErrors || errJson?.missing)) {
+      const e: any = new Error(`Sub-graph '${workflowName}' rejected input: ${detail}`);
       e.code = 'SUBGRAPH_INVALID_INPUT';
-      e.status = 400;
-      e.subgraph = workflowName;
       e.validationErrors = errJson?.validationErrors || null;
       e.missing = errJson?.missing || null;
-      throw e;
+      throw carry(e);
     }
 
-    const e: any = new Error(`Sub-graph '${workflowName}' trigger rejected (${triggerResp.status}): ${detail}`);
+    const e: any = new Error(`Sub-graph '${workflowName}' was not started (${triggerResp.status}${platformCode ? ` ${platformCode}` : ''}): ${detail}`);
     e.code = 'SUBGRAPH_TRIGGER_FAILED';
-    e.status = triggerResp.status;
-    e.subgraph = workflowName;
-    // The platform's own refusal code (e.g. PREPARATION_BUSY, RUN_BUSY) and
-    // whether it is a "not now, the same start later" refusal — FACTS a
-    // dispatcher branches on instead of parsing this message. `retryable` is
-    // set only when the platform said so.
-    if (typeof errJson?.code === 'string' && errJson.code) e.platformCode = errJson.code;
-    if (errJson?.retryable === true) e.retryable = true;
-    throw e;
+    throw carry(e);
   }
 
   // The body read rides the SAME signal — headers that arrive and a body that

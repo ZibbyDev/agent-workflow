@@ -104,6 +104,13 @@ describe('runInProcessSubgraph — begin endpoint errors', () => {
     });
   });
 
+  it('platform words: a 429 without a quotaInfo block is not called a quota — it falls to the HTTP path, which carries the platform code', async () => {
+    mockFetch(async () => jsonResp({ error: 'Too many concurrent workflow runs: 10 in flight (limit 10 per account).' }, { ok: false, status: 429 }));
+    const caught: any = await runInProcessSubgraph('child').catch((e) => e);
+    expect(caught.code).not.toBe('SUBGRAPH_QUOTA_EXCEEDED');
+    expect(caught.fallback).toBe(true);
+  });
+
   it('404 not-found throws typed SUBGRAPH_NOT_FOUND (not fallback)', async () => {
     mockFetch(async () => jsonResp({ error: 'not found' }, { ok: false, status: 404 }));
     await expect(runInProcessSubgraph('missing')).rejects.toMatchObject({

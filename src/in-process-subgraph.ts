@@ -383,10 +383,14 @@ async function callBegin({ apiBase, authToken, body }: any) {
       e.status = 404;
       throw e;
     }
-    if (resp.status === 429) {
-      const q = json?.quotaInfo || {};
+    // The quota only when the platform SAYS quota (a quotaInfo block). Any
+    // other refusal falls through to the HTTP path below, which answers with
+    // the platform's own code and words (sub-graph-executor) — a 429 is not a
+    // quota by its status alone.
+    if (resp.status === 429 && json?.quotaInfo) {
+      const q = json.quotaInfo;
       const e: any = new Error(
-        `Sub-graph blocked by quota (${q.used ?? '?'}/${q.limit ?? '?'} on ${q.planId || 'plan'})`,
+        `Sub-graph blocked by quota (${q.used ?? '?'}/${q.limit ?? '?'} on ${q.planId || 'plan'}): ${json?.error || json?.message || ''}`,
       );
       e.code = 'SUBGRAPH_QUOTA_EXCEEDED';
       e.status = 429;

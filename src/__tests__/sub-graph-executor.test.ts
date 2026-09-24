@@ -424,6 +424,38 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
     expect(caught.validationErrors).toHaveLength(1);
   });
 
+  it('platform words: a 429 that is NOT a quota (the account in-flight cap) is never called a quota', async () => {
+    const said = 'Too many concurrent workflow runs: 10 in flight (limit 10 per account). Wait for runs to finish (or cancel some), then retry.';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 429, json: { error: said, reason: 'concurrency_limit', limit: 10, current: 10 } }),
+    ));
+    const caught: any = await dispatchSubgraph('child', { input: {} }).catch((e) => e);
+    expect(caught.status).toBe(429);
+    expect(caught.code).not.toBe('SUBGRAPH_QUOTA_EXCEEDED');
+    expect(caught.message).not.toMatch(/quota|monthly/i);
+    expect(caught.message).toContain(said);
+  });
+
+  it('platform words: a 400 that is not an input-schema refusal keeps the platform code and says it was not started', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: { error: 'Missing ANTHROPIC_API_KEY for claude agent.', code: 'AGENT_KEY_MISSING' } }),
+    ));
+    const caught: any = await dispatchSubgraph('child', { input: {} }).catch((e) => e);
+    expect(caught.code).not.toBe('SUBGRAPH_INVALID_INPUT');
+    expect(caught.platformCode).toBe('AGENT_KEY_MISSING');
+    expect(caught.message).not.toMatch(/rejected input/);
+    expect(caught.message).toContain('Missing ANTHROPIC_API_KEY for claude agent.');
+  });
+
+  it('platform words: a quota 429 still carries the platform code, retryable and message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 429, json: { error: 'Monthly run quota reached', code: 'QUOTA_EXCEEDED', retryable: true, quotaInfo: { used: 5, limit: 5, planId: 'free' } } }),
+    ));
+    const caught: any = await dispatchSubgraph('child', { input: {} }).catch((e) => e);
+    expect(caught).toMatchObject({ code: 'SUBGRAPH_QUOTA_EXCEEDED', platformCode: 'QUOTA_EXCEEDED', retryable: true, status: 429 });
+    expect(caught.message).toContain('Monthly run quota reached');
+  });
+
   it('500 → generic SUBGRAPH_TRIGGER_FAILED (does not retry the POST — only polls retry on 5xx)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       mockResponse({ ok: false, status: 500, json: { error: 'boom' } }),
