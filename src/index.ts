@@ -33,7 +33,7 @@ export { WorkflowGraph, WorkflowGraph as Graph } from './graph.js';
 // to multiple child workflows in a loop (the declarative
 // `addNode({ workflow: 'name' })` form only dispatches once per node).
 export { dispatchSubgraph, dispatchParticipant, listParticipants } from './sub-graph-executor.js';
-export { currentRunEffort } from './exec-context.js';
+export { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 export { runCollaboration, remainingWorkflowTimeMs } from './collaboration.js';
 export {
   generateWorkflowSessionId,
@@ -101,7 +101,7 @@ export { validateStoreDefs, STORE_NAME_REGEX } from './stores.js';
 
 // Agent strategy system
 export { AgentStrategy } from './agents/base.js';
-export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrategy, invokeAgent, resolveInvocationModel, resolveInvocationExtras, resolveInvocationEffort, EFFORT_LEVELS, normalizeEffort, nodeOverrideInstructions, nodeReadsWorkspace, WORKSPACE_READ_TOOLS } from './strategy-registry.js';
+export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrategy, invokeAgent, resolveInvocationModel, resolveInvocationExtras, resolveInvocationEffort, EFFORT_LEVELS, normalizeEffort, DEFAULT_EFFORT_CEILING, effortCeiling, clampEffort, nodeOverrideInstructions, nodeReadsWorkspace, WORKSPACE_READ_TOOLS } from './strategy-registry.js';
 
 // Code generation (compile graph config to runnable JS)
 export { generateWorkflowCode, generateNodeConfigsJson } from './code-generator.js';

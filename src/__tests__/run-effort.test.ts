@@ -15,7 +15,7 @@ import { runInProcessSubgraph } from '../in-process-subgraph.js';
 import * as registry from '../subgraph-registry.js';
 import * as index from '../index.js';
 
-const ENV_KEYS = ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH', 'EFFORT'];
+const ENV_KEYS = ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH', 'EFFORT', 'EFFORT_CEILING'];
 const ORIG: Record<string, any> = {};
 
 beforeEach(() => {
@@ -25,6 +25,9 @@ beforeEach(() => {
   process.env.PROJECT_API_TOKEN = 'tok-abc';
   process.env.EXECUTION_ID = 'parent-1';
   delete process.env.EFFORT;
+  // Precedence is what these tests pin; the ceiling (effort-ceiling.test.ts) is
+  // raised to the top so it never interferes.
+  process.env.EFFORT_CEILING = 'max';
   registry._reset();
 });
 
@@ -57,7 +60,7 @@ describe('normalizeEffort — the one validator', () => {
 
 describe('resolveInvocationEffort — precedence', () => {
   it('operator pin > node option > run-level', () => {
-    expect(resolveInvocationEffort({ nodeConfigEffort: 'max', options: { effort: 'low' }, envEffort: 'high' })).toBe('max');
+    expect(resolveInvocationEffort({ nodeConfigEffort: 'max', options: { effort: 'low' }, envEffort: 'high', ceiling: 'max' })).toBe('max');
     expect(resolveInvocationEffort({ options: { effort: 'low' }, envEffort: 'high' })).toBe('low');
     expect(resolveInvocationEffort({ envEffort: 'high' })).toBe('high');
     expect(resolveInvocationEffort({})).toBeNull();

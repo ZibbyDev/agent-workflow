@@ -124,6 +124,10 @@ export function runInContext(ctx, fn) {
     // EFFORT). A scope that says nothing keeps the surrounding one.
     effort: ctx.effort !== undefined ? (ctx.effort || null) : (parent.effort ?? null),
     effortScoped: ctx.effort !== undefined ? true : (parent.effortScoped === true),
+    // The agent's EFFORT CEILING (the person's setting) for an in-process child:
+    // named by the begin answer, else the surrounding scope's. Unset = the
+    // process env (a container run's own EFFORT_CEILING). See currentEffortCeiling.
+    effortCeiling: typeof ctx.effortCeiling === 'string' && ctx.effortCeiling ? ctx.effortCeiling : (parent.effortCeiling ?? null),
     // agent/signal are the live run objects; inherit the parent's unless the
     // caller overrides — so a child scope keeps seeing an agent/signal for its
     // own dispatchSubgraph calls (see withAgentContext).
@@ -200,6 +204,18 @@ export function withRootContext(ctx, fn) {
  * or the agent's deployed default). Unvalidated here — resolveInvocationEffort
  * validates every layer the same way.
  */
+/**
+ * The EFFORT CEILING this run is held to — the agent's own setting, stamped by
+ * the platform (`EFFORT_CEILING` on a container run, `effortCeiling` on an
+ * in-process child scope). Raw; strategy-registry effortCeiling() validates and
+ * supplies the default.
+ */
+export function currentEffortCeiling(): string | null {
+  const store: any = _als.getStore();
+  if (store && typeof store.effortCeiling === 'string' && store.effortCeiling) return store.effortCeiling;
+  return process.env.EFFORT_CEILING || null;
+}
+
 export function currentRunEffort(): string | null {
   const store: any = _als.getStore();
   if (store && store.effortScoped === true) return store.effort || null;

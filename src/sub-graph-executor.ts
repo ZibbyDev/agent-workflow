@@ -518,7 +518,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
 
   if (options.async) {
     logger.info(`[sub-graph] async dispatch of '${workflowName}' → jobId=${jobId} (not waiting)`);
-    return { jobId, status: 'accepted', workflow: workflowName };
+    // The platform held the pick to the child agent's ceiling: say so to the caller.
+    const effortClamp = triggerJson?.data?.effortClamp || triggerJson?.effortClamp;
+    return { jobId, status: 'accepted', workflow: workflowName, ...(effortClamp ? { effortClamp } : {}) };
   }
 
   // Sync: poll the child's execution until it reaches a terminal status.

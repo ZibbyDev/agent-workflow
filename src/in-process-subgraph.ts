@@ -789,6 +789,9 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
           // row's own deployed EFFORT, else nothing. Same answer a container
           // child gets from its own env.
           effort: options.effort || (childEnv && typeof childEnv.EFFORT === 'string' ? childEnv.EFFORT : null),
+          // The CHILD agent's effort ceiling (its person's setting), from the
+          // begin answer — never the parent's process env.
+          ...(typeof begin.effortCeiling === 'string' && begin.effortCeiling ? { effortCeiling: begin.effortCeiling } : {}),
         },
         () => childGraph.run(options.parentAgent, childInitialState, {
           signal: deadline.signal,

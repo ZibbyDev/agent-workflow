@@ -15,7 +15,7 @@
 import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
-import { currentRunEffort } from './exec-context.js';
+import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -197,7 +197,31 @@ export function normalizeEffort(raw: any): { ok: boolean; effort: string | null;
   return { ok: true, effort: v };
 }
 
-export function resolveInvocationEffort({ options = {}, envEffort, nodeConfigEffort }: any = {}) {
+/**
+ * THE EFFORT CEILING — a SPEND guardrail the person owns, per agent (its
+ * Settings tab). The platform stamps it on every run (`EFFORT_CEILING`, or
+ * `effortCeiling` on an in-process child's begin); every invocation is clamped
+ * to it whoever asked — operator pin, node option, dispatcher, deployed EFFORT.
+ * Unset/unknown → DEFAULT_EFFORT_CEILING: xhigh/max only when a person raised
+ * it. The backend copies this default (constants/effort-levels.js) under the
+ * same tripwire as EFFORT_LEVELS.
+ */
+export const DEFAULT_EFFORT_CEILING = 'high';
+
+/** A usable ceiling: a known level, else the default. */
+export function effortCeiling(raw: any): string {
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return EFFORT_LEVELS.indexOf(v) === -1 ? DEFAULT_EFFORT_CEILING : v;
+}
+
+/** `level` lowered to `ceiling` when above it; null stays null (the vendor default is never invented). */
+export function clampEffort(level: string | null, ceiling: any): string | null {
+  if (!level) return null;
+  const cap = effortCeiling(ceiling);
+  return EFFORT_LEVELS.indexOf(level) > EFFORT_LEVELS.indexOf(cap) ? cap : level;
+}
+
+export function resolveInvocationEffort({ options = {}, envEffort, nodeConfigEffort, ceiling }: any = {}) {
   const pick = [nodeConfigEffort, options.effort, envEffort]
     .map((v) => (typeof v === 'string' ? v.trim().toLowerCase() : ''))
     .find(Boolean);
@@ -206,7 +230,9 @@ export function resolveInvocationEffort({ options = {}, envEffort, nodeConfigEff
     logger.warn(`[workflow] ignoring unknown effort "${pick}" — expected one of ${EFFORT_LEVELS.join(', ')}`);
     return null;
   }
-  return pick;
+  const ran = clampEffort(pick, ceiling);
+  if (ran !== pick) logger.warn(`[workflow] effort "${pick}" is above this agent's ceiling — running at "${ran}" (the person's setting)`);
+  return ran;
 }
 
 export function resolveInvocationExtras({ options = {}, stateView = {}, context = {} }: any = {}) {
@@ -333,6 +359,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     options,
     envEffort: currentRunEffort(),
     nodeConfigEffort,
+    ceiling: currentEffortCeiling(),
   });
 
   const finalOptions: any = {
