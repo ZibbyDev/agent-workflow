@@ -86,6 +86,10 @@ export { compileGraph, validateGraphConfig, extractSteps, CompilationError } fro
 // Node registry
 export { registerNode, getNodeImpl, hasNode, listNodeTypes, getNodeTemplate } from './node-registry.js';
 
+// Chat entry — a person talking to the agent itself (node `chatEntry: true`)
+export { CHAT_ENTRY_FLAG, declaresChatEntry, normalizeChatTurn, renderChatTurn, chatReplyText, chatEntryProblems, CHAT_MESSAGE_MAX, CHAT_CONVERSATION_MAX_ITEMS, CHAT_CONVERSATION_MAX_CHARS } from './chat-entry.js';
+export type { ChatTurn, ChatLine } from './chat-entry.js';
+
 // Skill registry
 export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills } from './skill-registry.js';
 

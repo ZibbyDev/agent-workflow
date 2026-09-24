@@ -34,6 +34,9 @@ import {
   STOP_REQUEST_FILE,
 } from './constants.js';
 import { timeline } from './timeline.js';
+import {
+  CHAT_ENTRY_FLAG, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
+} from './chat-entry.js';
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
@@ -921,7 +924,27 @@ export class WorkflowGraph {
       if (node?.config?.supervisionEntry === true || (node as any)?.supervisionEntry === true) {
         config.supervisionEntry = true;
       }
+      // `chatEntry: true` — THIS NODE IS WHERE A PERSON'S CHAT MESSAGE ENTERS.
+      //
+      // The platform reads it off the deployed row to decide who answers a
+      // person chatting on this agent's page: the agent itself (its run, with
+      // this node's model call carrying the message — see chat-entry.ts and
+      // run() below) instead of the Copilot speaking about it. Whitelisted
+      // because this block is an allowlist (see `uses` above); validated below
+      // once every node's config is known.
+      if (declaresChatEntry(node)) {
+        config[CHAT_ENTRY_FLAG] = true;
+      }
       if (Object.keys(config).length > 0) nodeConfigs[nodeId] = config;
+    }
+
+    // THE CHAT ENTRY IS ONE MODEL NODE. Refused HERE — the template sync and the
+    // deploy both serialize — so a bad declaration is a loud failure naming the
+    // node, never an agent whose chat silently answers nobody.
+    {
+      const declared = Object.keys(nodeConfigs).filter((id) => nodeConfigs[id]?.[CHAT_ENTRY_FLAG] === true);
+      const problems = chatEntryProblems(declared, (id) => typeof nodeConfigs[id]?.prompt === 'string' && nodeConfigs[id].prompt.trim() !== '');
+      if (problems.length) throw new Error(`Invalid chatEntry declaration: ${problems.join('; ')}`);
     }
 
     const edges = [];
@@ -1357,6 +1380,27 @@ export class WorkflowGraph {
       timeline.step('State validated against schema');
     }
 
+    // ── CHAT TURN (chat-entry.ts) ─────────────────────────────────────────────
+    // A run whose input carries `chat` is a person talking to this agent. It is
+    // an ORDINARY run — same entry, same nodes, same credentials — except that
+    // the model call of the ONE node declaring `chatEntry` carries the person's
+    // message and answers them in plain text. Refused up front when the graph
+    // declares no such node: running the agent would answer nobody.
+    const chatTurn = normalizeChatTurn(initialState.chat);
+    let chatNodeId: string | null = null;
+    const chatReplies: Array<{ node: string; text: string }> = [];
+    if (chatTurn) {
+      for (const [id, n] of this.nodes) {
+        if (declaresChatEntry(n)) { chatNodeId = id; break; }
+      }
+      if (!chatNodeId) {
+        const e: any = new Error('This agent does not take chat messages: no node in its graph declares chatEntry');
+        e.code = 'CHAT_ENTRY_UNDECLARED';
+        throw e;
+      }
+      timeline.step(`Chat turn — '${chatNodeId}' answers the person`);
+    }
+
     // Host processes (desktop apps, IDE plugins, CLIs) can pin a specific
     // session folder by setting ZIBBY_PIN_SESSION_PATH=1 + ZIBBY_SESSION_PATH
     // before spawning. Snapshot the pinned path *before* optional env
@@ -1395,6 +1439,9 @@ export class WorkflowGraph {
 
     const state = new WorkflowState({
       ...initialState,
+      // The NORMALIZED chat turn (bounded, trimmed) — what every node reads as
+      // `state.chat` to know a person is talking. Absent on every other run.
+      ...(chatTurn ? { chat: chatTurn } : {}),
       config,
       agentType,
       outputPath,
@@ -1624,16 +1671,39 @@ export class WorkflowGraph {
       // nodeContext (used by the default Node class). Without this, the
       // default code path bypasses the deadman entirely and a strategy
       // that ignores AbortSignal hangs graph.run forever.
+      // Is this node's model call the CHAT call? Only on a chat turn, only for
+      // the declared node — every other node and every other run is untouched.
+      const chatCall = !!(chatTurn && currentNode === chatNodeId);
       const boundInvokeAgent = async (prompt, ctx, opts: any = {}) => {
         // Always inject the engine's internal signal into the strategy
         // options. Node.execute doesn't pass signal itself, so without
         // this slice-3 strategies wouldn't see the engine's abort
         // lifecycle on the default code path. Engine wins by ordering.
-        const strategyPromise = rawInvokeAgent(prompt, ctx, {
+        // A CHAT call carries the conversation and the person's words after the
+        // node's own prompt, and sends no structured-answer schema: the reply is
+        // free text and it is what the person reads.
+        const strategyPromise = rawInvokeAgent(chatCall ? `${prompt}\n${renderChatTurn(chatTurn as any)}` : prompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
           ...opts,                // caller-explicit overrides
+          ...(chatCall ? { schema: undefined } : {}),
           signal: internalAbortController.signal,  // engine always wins
         });
+        // The reply leaves the moment the model returns — before the node's own
+        // bookkeeping and the rest of the run — so the person is not kept
+        // waiting on work that is not an answer to them. Awaited, so a run that
+        // ends right after its answer cannot exit before the answer is out.
+        const deliver = (p: Promise<any>) => (!chatCall ? p : p.then(async (res) => {
+          const text = chatReplyText(res);
+          if (text) {
+            chatReplies.push({ node: currentNode, text });
+            timeline.step('Replied to the person');
+            if (typeof options.onChatReply === 'function') {
+              try { await options.onChatReply({ node: currentNode, text }); }
+              catch (err: any) { console.warn(`[workflow] chat reply could not be delivered: ${err?.message || err}`); }
+            }
+          }
+          return res;
+        }));
         // Suppress "unhandled rejection" if the deadman wins and the
         // strategy later rejects on its own.
         strategyPromise.catch(() => {});
@@ -1641,9 +1711,9 @@ export class WorkflowGraph {
         // Pre-aborted: skip the race — strategy will see signal.aborted
         // synchronously and reject quickly.
         if (internalAbortController.signal.aborted) {
-          return strategyPromise;
+          return deliver(strategyPromise);
         }
-        return Promise.race([
+        return deliver(Promise.race([
           strategyPromise,
           new Promise((_resolve, reject) => {
             const onAbortStartDeadman = () => {
@@ -1666,7 +1736,7 @@ export class WorkflowGraph {
               { once: true },
             );
           }),
-        ]);
+        ]));
       };
 
       // Wrap invokeAgent so node code calls `invokeAgent(promptValues)` and we
@@ -1876,6 +1946,7 @@ export class WorkflowGraph {
 
     timeline.graphComplete();
     const result: any = { success: true, state: state.getAll(), executionLog };
+    if (chatTurn) result.chatReplies = chatReplies;
     if (agent && typeof agent.onComplete === 'function') {
       await agent.onComplete(result);
     }
