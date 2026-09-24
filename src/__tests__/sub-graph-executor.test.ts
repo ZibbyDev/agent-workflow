@@ -134,6 +134,8 @@ describe('dispatchParticipant — UUID binding dispatch', () => {
     expect(JSON.parse(init.body)).toEqual({
       input: { objective: 'Review the merge proposal' },
       parentExecutionId: 'parent-exec-99',
+      // The parent proposes the child's id (a lost answer stays answerable).
+      executionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       idempotencyKey: 'council:review-1:critic',
       participantBindingId: 'critic',
       protocolId: 'discuss.v1',
@@ -429,6 +431,21 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
 
     await expect(dispatchSubgraph('child', { input: {} }))
       .rejects.toMatchObject({ code: 'SUBGRAPH_TRIGGER_FAILED', status: 500 });
+  });
+
+  it('a "not now" refusal carries the platform\'s code and retryable — facts, not a message to parse (live 2026-09-24: PREPARATION_BUSY booked as a failed attempt)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 409, json: { error: 'PREPARATION_BUSY', code: 'PREPARATION_BUSY', retryable: true } }),
+    ));
+    await expect(dispatchSubgraph('child', { input: {} }))
+      .rejects.toMatchObject({ code: 'SUBGRAPH_TRIGGER_FAILED', status: 409, platformCode: 'PREPARATION_BUSY', retryable: true });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 409, json: { error: 'ENVIRONMENT_REPOSITORY_MISMATCH', code: 'ENVIRONMENT_REPOSITORY_MISMATCH' } }),
+    ));
+    const caught: any = await dispatchSubgraph('child', { input: {} }).catch((e) => e);
+    expect(caught.platformCode).toBe('ENVIRONMENT_REPOSITORY_MISMATCH');
+    expect(caught.retryable).toBeUndefined();
   });
 });
 

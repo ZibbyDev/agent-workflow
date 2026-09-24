@@ -122,8 +122,29 @@ describe('the trigger POST is bounded', () => {
     vi.stubGlobal('fetch', vi.fn((_url: any, init: any) => neverAnswers(init)));
     const err: any = await dispatchSubgraph('backend-specialist', { input: {}, async: true }).catch((e) => e);
     expect(err.message).toContain('TIMED OUT after 1000ms (SUBGRAPH_TRIGGER_TIMEOUT_MS)');
-    // …and it says what that MEANS for the caller, which is the actionable half.
-    expect(err.message).toContain('no child was dispatched');
+    // …and it says what that MEANS for the caller, which is the actionable half:
+    // UNKNOWN, never "no child was dispatched" (live 2026-09-24: the child
+    // appeared 58 s after that sentence was logged).
+    expect(err.message).toContain('whether the child started is UNKNOWN');
+    expect(err.message).not.toContain('no child was dispatched');
+    expect(err.outcome).toBe('unknown');
+  });
+
+  it('a dispatch from a parent run PROPOSES the child\'s id, and a timeout hands that id back to look up', async () => {
+    const prev = process.env.EXECUTION_ID;
+    process.env.EXECUTION_ID = 'parent-run-1';
+    try {
+      const fetchMock = vi.fn((_url: any, init: any) => neverAnswers(init));
+      vi.stubGlobal('fetch', fetchMock);
+      const err: any = await dispatchSubgraph('ticket-triage', { input: {}, async: true }).catch((e) => e);
+      const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(sent.parentExecutionId).toBe('parent-run-1');
+      expect(sent.executionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(err).toMatchObject({ code: 'SUBGRAPH_TRIGGER_TIMEOUT', outcome: 'unknown', executionId: sent.executionId });
+      expect(err.message).toContain(sent.executionId);
+    } finally {
+      if (prev === undefined) delete process.env.EXECUTION_ID; else process.env.EXECUTION_ID = prev;
+    }
   });
 
   it('a stalled trigger BODY is caught the same way — headers-then-stall is the same hang', async () => {

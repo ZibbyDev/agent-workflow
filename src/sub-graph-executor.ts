@@ -34,6 +34,8 @@
  * keep the "no cloud creds = no sub-graphs" invariant from v1.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { logger } from './logger.js';
 import { runInProcessSubgraph, SubgraphFallback, subgraphTimeoutError } from './in-process-subgraph.js';
 import { getExecContext } from './exec-context.js';
@@ -361,9 +363,21 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // historical URL.
   const triggerWorkflowName = options.participantBindingId ? 'participant' : workflowName;
   const triggerUrl = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(triggerWorkflowName)}/trigger`;
+  // THE CHILD'S ID, PROPOSED BY THIS PARENT. A trigger whose answer never
+  // arrives (a deadline, a dropped connection) leaves "did the child start?"
+  // UNKNOWN — and on 2026-09-24 a manager read that silence as "no", while the
+  // platform created the child a minute later with nobody claiming it. With the
+  // id chosen here, the caller can look the child up, and a platform that
+  // honours it (backend handlers/workflow-trigger.js) answers the same request
+  // sent again with the run it already started. A platform that does not know
+  // the field ignores it and mints its own id, exactly as before.
+  const proposedExecutionId = parentExecutionId
+    ? (typeof options.executionId === 'string' && options.executionId ? options.executionId : randomUUID())
+    : null;
   const body: any = {
     input: options.input || {},
     ...(parentExecutionId ? { parentExecutionId } : {}),
+    ...(proposedExecutionId ? { executionId: proposedExecutionId } : {}),
     ...(getDispatchNodeId() ? { dispatchNodeId: getDispatchNodeId() } : {}),
     ...(!options.async && typeof options.output === 'string' && options.output.trim()
       ? { resultPath: options.output.trim() }
@@ -398,13 +412,20 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     // message (undici's bare `TypeError: fetch failed`), the same `.status` —
     // so every existing caller branch is byte-for-byte as it is today.
     if (!isTimeoutError(err)) throw err;
+    // UNKNOWN, NOT "NO". The request reached the platform or it did not, and
+    // the platform may still be starting the child (live, 2026-09-24: the child
+    // appeared 58 s after this very message said nothing had been dispatched).
+    // `executionId` is the id this parent proposed — the one to look up.
     const e: any = new Error(
-      `Sub-graph '${workflowName}' trigger TIMED OUT ${triggerDl.label} — the platform never answered, `
-      + 'so no child was dispatched and nothing needs reconciling.',
+      `Sub-graph '${workflowName}' trigger TIMED OUT ${triggerDl.label} — the platform did not answer in time, `
+      + 'so whether the child started is UNKNOWN'
+      + (proposedExecutionId ? `; if it did, its execution id is ${proposedExecutionId} — look it up before starting the same work again.` : '.'),
     );
     e.code = 'SUBGRAPH_TRIGGER_TIMEOUT';
     e.subgraph = workflowName;
     e.timedOut = true;
+    e.outcome = 'unknown';
+    if (proposedExecutionId) e.executionId = proposedExecutionId;
     e.cause = err;
     throw e;
   }
@@ -458,6 +479,12 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     e.code = 'SUBGRAPH_TRIGGER_FAILED';
     e.status = triggerResp.status;
     e.subgraph = workflowName;
+    // The platform's own refusal code (e.g. PREPARATION_BUSY, RUN_BUSY) and
+    // whether it is a "not now, the same start later" refusal — FACTS a
+    // dispatcher branches on instead of parsing this message. `retryable` is
+    // set only when the platform said so.
+    if (typeof errJson?.code === 'string' && errJson.code) e.platformCode = errJson.code;
+    if (errJson?.retryable === true) e.retryable = true;
     throw e;
   }
 
@@ -472,11 +499,14 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     if (!isTimeoutError(err)) throw err;
     const e: any = new Error(
       `Sub-graph '${workflowName}' trigger body read TIMED OUT ${triggerDl.label} — the platform accepted the `
-      + 'dispatch but never finished answering, so its jobId is unknown and nothing can reconcile it.',
+      + 'dispatch but never finished answering'
+      + (proposedExecutionId ? `; the child's execution id is ${proposedExecutionId} if the platform honoured it — look it up.` : ', so its jobId is unknown.'),
     );
     e.code = 'SUBGRAPH_TRIGGER_TIMEOUT';
     e.subgraph = workflowName;
     e.timedOut = true;
+    e.outcome = 'unknown';
+    if (proposedExecutionId) e.executionId = proposedExecutionId;
     e.cause = err;
     throw e;
   }
