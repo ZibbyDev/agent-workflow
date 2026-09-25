@@ -14,7 +14,7 @@ import { registerStrategy, invokeAgent } from '../strategy-registry.js';
 
 let captured = '';
 const ctx = { state: { agentType: 'probe' } };
-const opts = { skills: ['jira', 'code-scan'] };
+const opts = { skills: ['jira', 'code-scan'], model: 'test-model' };
 
 beforeEach(() => {
   captured = '';
@@ -87,7 +87,7 @@ describe('promptFragment follows the MOUNT (inProcessOnly skills)', () => {
   });
 
   it('drops an inProcessOnly fragment under a NATIVE (non-assistant) strategy', async () => {
-    await invokeAgent('B', ctx, { skills: ['git-like'] });
+    await invokeAgent('B', ctx, { skills: ['git-like'], model: 'test-model' });
     expect(captured).not.toContain('git_checkout');
     expect(captured).not.toContain('## Git Repositories');
   });
@@ -99,12 +99,12 @@ describe('promptFragment follows the MOUNT (inProcessOnly skills)', () => {
       canHandle: () => true,
       async invoke(prompt: string) { captured = prompt; return { output: 'ok' }; },
     } as any);
-    await invokeAgent('B', { state: { agentType: 'assistant' } }, { skills: ['git-like'] });
+    await invokeAgent('B', { state: { agentType: 'assistant' } }, { skills: ['git-like'], model: 'test-model' });
     expect(captured).toContain('git_checkout');
   });
 
   it('a skill WITHOUT the flag is injected exactly as before (fail-open)', async () => {
-    await invokeAgent('B', ctx, { skills: ['code-scan'] });
+    await invokeAgent('B', ctx, { skills: ['code-scan'], model: 'test-model' });
     expect(captured).toContain('Code scan');
   });
 });

@@ -167,7 +167,7 @@ describe('strategy-registry', () => {
       const result = await invokeAgent(
         'do the thing',
         { preferredAgent: 'alpha' },
-        { workspace: '/tmp/x' }
+        { workspace: '/tmp/x', model: 'test-model' }
       );
 
       expect(result).toBe('ok');
@@ -190,7 +190,7 @@ describe('strategy-registry', () => {
       );
 
       const servers = [{ serverName: 'mcp_8faec046', def: { transport: 'http', url: 'https://x/mcp' } }];
-      await invokeAgent('go', { preferredAgent: 'alpha', state: { extraMcpServers: servers } }, {});
+      await invokeAgent('go', { preferredAgent: 'alpha', state: { extraMcpServers: servers } }, { model: 'test-model' });
 
       expect(received.extraMcpServers).toEqual(servers);
     });
@@ -210,7 +210,7 @@ describe('strategy-registry', () => {
           preferredAgent: 'alpha',
           state: { _currentNodeConfig: { extraPromptInstructions: 'OVERRIDE_X' } },
         },
-        {}
+        { model: 'test-model' }
       );
 
       expect(captured).toContain('base prompt');
@@ -224,16 +224,16 @@ describe('strategy-registry', () => {
       registerStrategy(new FakeStrategy('alpha', { invoke: async (prompt) => { captured = prompt; return 'ok'; } }));
       const nodeConfig = { extraPromptInstructions: 'OVERRIDE_X', workspaceInstructions: 'CHECKOUT_AT_/workspace' };
 
-      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['WebFetch'] });
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['WebFetch'], model: 'test-model' });
       // Byte-identical to the one field the executor used to write: override, blank line, platform text.
       expect(captured).toContain('OVERRIDE_X\n\nCHECKOUT_AT_/workspace');
 
-      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob', 'WebFetch'] });
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: nodeConfig } }, { disallowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob', 'WebFetch'], model: 'test-model' });
       expect(captured).toContain('OVERRIDE_X');
       expect(captured).not.toContain('CHECKOUT_AT_');
 
       // Only the platform text and a node with no file access → no block at all.
-      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: { workspaceInstructions: 'CHECKOUT' } } }, { disallowedTools: ['Bash', 'Read', 'Grep', 'Glob'] });
+      await invokeAgent('base', { preferredAgent: 'alpha', state: { _currentNodeConfig: { workspaceInstructions: 'CHECKOUT' } } }, { disallowedTools: ['Bash', 'Read', 'Grep', 'Glob'], model: 'test-model' });
       expect(captured).not.toContain('PRIORITY OVERRIDE');
 
       // Fail-open: no declaration, or a partial one, still reads the checkout.
@@ -268,7 +268,7 @@ describe('strategy-registry', () => {
       expect(stateInstance._currentNodeConfig).toBeUndefined();
       expect(stateInstance.agentType).toBeUndefined();
 
-      await invokeAgent('base prompt', { state: stateInstance }, {});
+      await invokeAgent('base prompt', { state: stateInstance }, { model: 'test-model' });
 
       expect(captured).toContain('base prompt');
       expect(captured).toContain('OVERRIDE_VIA_INSTANCE');
@@ -349,9 +349,12 @@ describe('per-node model pin (the fifth executor read-site)', () => {
     })).toBe('opus-4.7');
   });
 
-  it('empty pins fall through to the run-level chain', async () => {
+  it('an empty pin is no pick — and there is no run-level model to fall to (MODEL env is not read)', async () => {
     const { resolveInvocationModel } = await import('../strategy-registry');
-    expect(resolveInvocationModel({ nodeConfigModel: '  ', envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
-    expect(resolveInvocationModel({ envModel: 'sonnet-4.6', strategyName: 'claude' })).toBe('sonnet-4.6');
+    process.env.MODEL = 'sonnet-4.6';
+    try {
+      expect(resolveInvocationModel({ nodeConfigModel: '  ', strategyName: 'claude' })).toBeNull();
+      expect(resolveInvocationModel({ strategyName: 'claude' })).toBeNull();
+    } finally { delete process.env.MODEL; }
   });
 });

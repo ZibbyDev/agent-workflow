@@ -176,9 +176,9 @@ describe('invokeAgent — the run-level effort reaches the strategy', () => {
       invoke: async (_p: string, options: any) => { received.push(options.effort); return 'ok'; },
     } as any);
     try {
-      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake' }, {}));
-      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake' }, { effort: 'low' }));
-      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake', state: { _currentNodeConfig: { effort: 'max' } } }, { effort: 'low' }));
+      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake' }, { model: 'test-model' }));
+      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake' }, { effort: 'low', model: 'test-model' }));
+      await runInContext({ executionId: 'child', effort: 'xhigh' }, () => fresh.invokeAgent('x', { preferredAgent: 'fake', state: { _currentNodeConfig: { effort: 'max' } } }, { effort: 'low', model: 'test-model' }));
       expect(received).toEqual(['xhigh', 'low', 'max']);
     } finally {
       g[REGISTRY_KEY].length = 0;

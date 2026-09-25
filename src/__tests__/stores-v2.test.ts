@@ -111,7 +111,7 @@ describe('Stores v2 — AVAILABLE STORES catalog rendering', () => {
           },
         },
       },
-      {}
+      { model: 'test-model' }
     );
 
     const p = strat.captured;
@@ -134,7 +134,7 @@ describe('Stores v2 — AVAILABLE STORES catalog rendering', () => {
         preferredAgent: 'alpha',
         state: { _currentNodeConfig: { stores: [{ id: 'store_legacy', description: 'old' }] } },
       },
-      {}
+      { model: 'test-model' }
     );
 
     expect(strat.captured).toContain('- store_legacy  ·  old   (id: store_legacy)');
@@ -145,7 +145,7 @@ describe('Stores v2 — AVAILABLE STORES catalog rendering', () => {
     const strat = new FakeStrategy();
     registerStrategy(strat);
 
-    await invokeAgent('base prompt', { preferredAgent: 'alpha', state: {} }, {});
+    await invokeAgent('base prompt', { preferredAgent: 'alpha', state: {} }, { model: 'test-model' });
 
     expect(strat.captured).toBe('base prompt');
     expect(strat.captured).not.toContain('AVAILABLE STORES');
@@ -159,7 +159,7 @@ describe('Stores v2 — AVAILABLE STORES catalog rendering', () => {
     await invokeAgent(
       'base prompt',
       { preferredAgent: 'alpha', state: { _currentNodeConfig: { stores: [] } } },
-      {}
+      { model: 'test-model' }
     );
 
     expect(strat.captured).toBe('base prompt');

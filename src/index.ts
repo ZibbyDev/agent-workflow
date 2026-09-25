@@ -101,7 +101,7 @@ export { validateStoreDefs, STORE_NAME_REGEX } from './stores.js';
 
 // Agent strategy system
 export { AgentStrategy } from './agents/base.js';
-export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrategy, invokeAgent, resolveInvocationModel, resolveInvocationExtras, resolveInvocationEffort, EFFORT_LEVELS, normalizeEffort, DEFAULT_EFFORT_CEILING, effortCeiling, clampEffort, nodeOverrideInstructions, nodeReadsWorkspace, WORKSPACE_READ_TOOLS } from './strategy-registry.js';
+export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrategy, invokeAgent, resolveInvocationModel, nodeOwnAgent, requireNodeModel, resolveInvocationExtras, resolveInvocationEffort, EFFORT_LEVELS, normalizeEffort, DEFAULT_EFFORT_CEILING, effortCeiling, clampEffort, nodeOverrideInstructions, nodeReadsWorkspace, WORKSPACE_READ_TOOLS } from './strategy-registry.js';
 
 // Code generation (compile graph config to runnable JS)
 export { generateWorkflowCode, generateNodeConfigsJson } from './code-generator.js';

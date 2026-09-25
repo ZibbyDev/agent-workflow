@@ -10,13 +10,13 @@ describe('invokeAgent passes extraMcpServers to the strategy', () => {
       invoke: async (_p, opts) => { seen = opts.extraMcpServers; return 'ok'; },
     });
     const extra = [{ serverName: 'custom-mcp-X', def: { transport: 'http', url: 'https://m/rpc' } }];
-    await invokeAgent('hi', { state: { agentType: 'capture', extraMcpServers: extra } }, {});
+    await invokeAgent('hi', { state: { agentType: 'capture', extraMcpServers: extra } }, { model: 'test-model' });
     expect(seen).toEqual(extra);
   });
   it('absent → empty array (backward compatible)', async () => {
     let seen = 'unset';
     registerStrategy({ name: 'cap2', getName: () => 'cap2', canHandle: () => true, invoke: async (_p, o) => { seen = o.extraMcpServers; return 'ok'; } });
-    await invokeAgent('hi', { state: { agentType: 'cap2' } }, {});
+    await invokeAgent('hi', { state: { agentType: 'cap2' } }, { model: 'test-model' });
     expect(seen).toEqual([]);
   });
 });

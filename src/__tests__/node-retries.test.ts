@@ -238,7 +238,7 @@ describe('node `retries` — re-execution, successors, and loud exhaustion', () 
     g.addEdge('after', 'END');
 
     await expect(
-      g.run(null, { cwd, agentType: '__retry_probe__' }),
+      g.run(null, { cwd, agentType: '__retry_probe__', config: { models: { default: 'probe-model' } } }),
       'DRIFT: an LLM node whose retries are exhausted must FAIL the run, not resolve success:true',
     ).rejects.toThrow(/Node 'llm' failed after 4 attempt\(s\)/);
     rmSync(cwd, { recursive: true, force: true });

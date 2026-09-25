@@ -68,7 +68,7 @@ describe('invokeAgent forwards options.plugins to the chosen strategy (strategy-
     registerStrategy(fake);
 
     const PLUGINS = [{ name: 'product-design', marketplacePath: '/abs/mp' }];
-    await invokeAgent('p', { preferredAgent: 'fake-plugins', state: {} }, { plugins: PLUGINS });
+    await invokeAgent('p', { preferredAgent: 'fake-plugins', state: {} }, { plugins: PLUGINS, model: 'test-model' });
 
     expect(seen).not.toBeNull();
     expect(seen.plugins).toEqual(PLUGINS);

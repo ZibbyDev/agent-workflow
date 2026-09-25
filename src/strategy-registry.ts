@@ -67,37 +67,55 @@ export function listStrategies() {
  */
 /**
  * The ONE place an invocation's model is resolved. Chain, most-specific first:
- *   nodeConfigModel (the operator's saved per-node pin, shipped with the run's
- *   nodeConfigs and overlaid per node — see below)
+ *   nodeConfigModel (the operator's saved per-node pin — or, on a platform run,
+ *   the node's own model the control plane resolved for it — shipped with the
+ *   run's nodeConfigs and overlaid per node)
  *   > config.models[node] > config.models.default > config.agent[vendor].model
- *   > options.model (the node's explicit per-call pick, e.g. triage's cheap tier)
- * Pure function so the contract is unit-tested — the o4-mini incident was this
- * chain resolving to null and the strategy silently substituting its vendor
- * default underneath us.
+ *   > options.model (the node's explicit per-call pick)
+ * and NOTHING below that. Pure function so the contract is unit-tested.
  *
- * nodeConfigModel closed the FIFTH executor-drift read-site: the dashboard's
- * per-node model pin (workflow row nodeConfigOverrides[node].model) always
- * SHIPPED with container runs (state.nodeConfigs → _currentNodeConfig) and this
- * chain always honored config.models[node] — but nothing connected the two, so
- * a pinned node silently ran the run-level MODEL instead (found live: a
- * gitlab-kb-sync fetch node pinned to opus ran sonnet). The copilot turn
- * runtime had the same class fixed earlier — each executor re-reading model
- * config is one more chance to drift; this wires the last container-side one.
+ * ⛔ THERE IS NO RUN-WIDE FALLBACK. The chain used to end in `MODEL` env — the
+ * control plane stamped the FIRST node pin it found (sorted by node name) on
+ * the whole run, so every node with no pick of its own silently ran on a
+ * sibling's model and that sibling's vendor key (founder, 2026-09-25: "there
+ * is no default model … we don't have default per agent"). A node's model now
+ * comes only from that node; null means nobody chose one, and invokeAgent
+ * refuses (`NODE_MODEL_UNSET`) rather than let the vendor substitute its own
+ * default (the o4-mini incident was that substitution).
  */
-export function resolveInvocationModel({ config = {}, options = {}, strategyName, envModel, nodeConfigModel }: any = {}) {
+export function resolveInvocationModel({ config = {}, options = {}, strategyName, nodeConfigModel }: any = {}) {
   const modelsConfig = config.models || {};
   const pinnedModel = (typeof nodeConfigModel === 'string' && nodeConfigModel.trim())
     ? nodeConfigModel.trim() : null;
   const nodeModel = options.nodeName ? (modelsConfig[options.nodeName] || null) : null;
   const globalModel = modelsConfig.default || null;
   const agentModel = config.agent?.[strategyName]?.model || null;
-  // The RUN's model — `MODEL` env, stamped on every run container by the
-  // executor from the operator's pick. Below options.model so an explicit
-  // per-call override (triage's cheap tier) still wins; above nothing, because
-  // "nothing" is what let the strategy's hardcoded vendor default run instead
-  // of the model the operator chose.
-  const runModel = (typeof envModel === 'string' ? envModel.trim() : '') || null;
-  return pinnedModel || nodeModel || globalModel || agentModel || options.model || runModel || null;
+  return pinnedModel || nodeModel || globalModel || agentModel || options.model || null;
+}
+
+/**
+ * The vendor saved on THIS node for this run (its per-run node config), or ''.
+ * ONE reading for both invokeAgents (this engine's and @zibby/core's), so a
+ * code node and a prompt node pick the same vendor for the same pin.
+ */
+export function nodeOwnAgent(stateView: any): string {
+  const a = stateView?._currentNodeConfig?.agent;
+  return typeof a === 'string' ? a.trim() : '';
+}
+
+/**
+ * THE refusal when an invocation resolved no model — shared by both
+ * invokeAgents. Nothing below the node's own chain may supply one: not the
+ * run's MODEL env (another node's pick), not the vendor CLI's default.
+ */
+export function requireNodeModel(model: any, { node, strategyName }: { node?: string; strategyName?: string } = {}) {
+  if (typeof model === 'string' && model.trim()) return model;
+  const e: any = new Error(
+    `No model for "${node || 'this node'}" on ${strategyName || 'its vendor'}: nobody chose one for this node, and a node `
+    + 'never borrows another\'s (pick it on the node in the agent\'s graph, or pass `model` / set `models` in the run config).',
+  );
+  e.code = 'NODE_MODEL_UNSET';
+  throw e;
 }
 
 /**
@@ -333,6 +351,14 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // into the image has to materialize before the synchronous gate below can say
   // it is available. A failure here THROWS (it never becomes "unavailable"), so
   // an agent pinned to one vendor can never quietly run on another.
+  // THE NODE'S OWN VENDOR. A node's saved vendor rides its per-run node config
+  // (_currentNodeConfig.agent). When nothing more specific named the engine
+  // (a template pin on the node, the run config's per-node map), that is the
+  // vendor — never the run's `agentType`, which is another node's pick: an
+  // in-process child pinned to codex ran on its claude parent's vendor, and
+  // the vendor guard below then discarded its model as foreign.
+  const ownAgent = nodeOwnAgent(stateView);
+  if (!ctx.preferredAgent && ownAgent) ctx.preferredAgent = ownAgent;
   await prepareAgentStrategy(ctx);
   const strategy = getAgentStrategy(ctx);
 
@@ -350,9 +376,9 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     config,
     options,
     strategyName: strategy.name,
-    envModel: process.env.MODEL,
     nodeConfigModel,
   });
+  requireNodeModel(model, { node: options.nodeName, strategyName: strategy.name });
   // Same vendor guard as the model: a pin aimed at another vendor is inert here.
   const nodeConfigEffort = (!nodePinAgent || nodePinAgent === strategy.name) ? nodePin.effort : null;
   const effort = resolveInvocationEffort({
