@@ -472,10 +472,17 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       throw carry(e);
     }
 
-    // The child's input schema refused what the parent passed — only when the
-    // platform says which fields (runner-injected contextSchema fields like
-    // workspace/tokens are NOT the parent's responsibility).
-    if (triggerResp.status === 400 && (errJson?.validationErrors || errJson?.missing)) {
+    // The child's input schema refused what the parent passed. The platform
+    // says so by CODE (`INPUT_INVALID`: its message names the child, what is
+    // missing and which run sent it); a platform from before that code is read
+    // by the old signal (a 400 listing the fields). Another 400 that happens to
+    // carry a `missing` list — a required integration not connected — has its
+    // own code and is NOT the parent's input (it read "rejected input" until
+    // 2026-09-25).
+    const inputRefused = triggerResp.status === 400 && (platformCode
+      ? platformCode === 'INPUT_INVALID'
+      : !!(errJson?.validationErrors || errJson?.missing));
+    if (inputRefused) {
       const e: any = new Error(`Sub-graph '${workflowName}' rejected input: ${detail}`);
       e.code = 'SUBGRAPH_INVALID_INPUT';
       e.validationErrors = errJson?.validationErrors || null;

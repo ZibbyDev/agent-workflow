@@ -424,6 +424,31 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
     expect(caught.validationErrors).toHaveLength(1);
   });
 
+  it('INPUT_INVALID → SUBGRAPH_INVALID_INPUT carrying the platform\'s sentence (child, fields, sender), never retryable', async () => {
+    const said = 'product-owner was not started: its input does not meet what it declares. The input fits none of this agent\'s jobs: … Sent by the run p-1 (magnum) that dispatched it.';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: { error: said, code: 'INPUT_INVALID', retryable: false, missing: ['prdUrl', 'prdText', 'prdTicketKey', 'ticketKey'], validationErrors: [{ kind: 'union', path: '' }] } }),
+    ));
+    let caught;
+    try { await dispatchSubgraph('product-owner', { input: { instruction: 'redo it' } }); } catch (e) { caught = e; }
+    expect(caught.code).toBe('SUBGRAPH_INVALID_INPUT');
+    expect(caught.platformCode).toBe('INPUT_INVALID');
+    expect(caught.message).toContain(said);
+    expect(caught.missing).toEqual(['prdUrl', 'prdText', 'prdTicketKey', 'ticketKey']);
+    expect(caught.retryable).toBeUndefined();
+  });
+
+  it('a 400 that lists `missing` under ANOTHER code (an integration not connected) is not called rejected input', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: { error: 'Connect GitHub first.', code: 'INTEGRATION_NOT_CONNECTED', missing: ['github'] } }),
+    ));
+    let caught;
+    try { await dispatchSubgraph('developer', { input: {} }); } catch (e) { caught = e; }
+    expect(caught.code).toBe('SUBGRAPH_TRIGGER_FAILED');
+    expect(caught.platformCode).toBe('INTEGRATION_NOT_CONNECTED');
+    expect(caught.message).toContain('Connect GitHub first.');
+  });
+
   it('platform words: a 429 that is NOT a quota (the account in-flight cap) is never called a quota', async () => {
     const said = 'Too many concurrent workflow runs: 10 in flight (limit 10 per account). Wait for runs to finish (or cancel some), then retry.';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
