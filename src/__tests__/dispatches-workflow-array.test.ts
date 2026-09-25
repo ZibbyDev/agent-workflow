@@ -85,7 +85,7 @@ describe('minimumReadyChildren serialization', () => {
     expect(() => graph.serialize()).toThrow(/minimumReadyChildren \(3\).*roster \(2\)/);
   });
 
-  it.each([0, -1, 1.5, '2'])('rejects an invalid threshold: %p', (minimumReadyChildren) => {
+  it.each([-1, 1.5, '2'])('rejects an invalid threshold: %p', (minimumReadyChildren) => {
     const graph = new WorkflowGraph();
     graph.addNode('bad', {
       name: 'bad', _isCustomCode: true,
@@ -93,6 +93,26 @@ describe('minimumReadyChildren serialization', () => {
       minimumReadyChildren,
     } as any);
     graph.setEntryPoint('bad');
-    expect(() => graph.serialize()).toThrow(/minimumReadyChildren must be a positive integer/);
+    expect(() => graph.serialize()).toThrow(/minimumReadyChildren must be a whole number/);
+  });
+
+  it('0 declares an OPTIONAL step — serialized, so every reader sees none of its members is required', () => {
+    const graph = new WorkflowGraph();
+    graph.addNode('Ask Council', {
+      name: 'Ask Council', _isCustomCode: true,
+      dispatchesWorkflow: 'collaboration-discussion',
+      minimumReadyChildren: 0,
+    } as any);
+    graph.setEntryPoint('Ask Council');
+    const cfg = graph.serialize().nodeConfigs['Ask Council'];
+    expect(cfg.dispatchesWorkflow).toBe('collaboration-discussion');
+    expect(cfg.minimumReadyChildren).toBe(0);
+  });
+
+  it('a threshold on a node with no roster is refused — there is nothing for it to apply to', () => {
+    const graph = new WorkflowGraph();
+    graph.addNode('lonely', { name: 'lonely', _isCustomCode: true, minimumReadyChildren: 0 } as any);
+    graph.setEntryPoint('lonely');
+    expect(() => graph.serialize()).toThrow(/no dispatchesWorkflow roster/);
   });
 });

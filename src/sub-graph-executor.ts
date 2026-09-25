@@ -40,6 +40,7 @@ import { logger } from './logger.js';
 import { runInProcessSubgraph, SubgraphFallback, subgraphTimeoutError } from './in-process-subgraph.js';
 import { getExecContext } from './exec-context.js';
 import { normalizeEffort } from './strategy-registry.js';
+import { notSetUpError, refusalSaysNotSetUp } from './not-set-up.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
@@ -470,6 +471,14 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
       e.code = 'SUBGRAPH_QUOTA_EXCEEDED';
       e.quotaInfo = q;
       throw carry(e);
+    }
+
+    // The member is NOT SET UP (a model node with no model, no key for a vendor
+    // it runs on, too few of its declared roster set up) — the platform says so
+    // with `notSetUp: true`. A fact about the member, typed so a step declared
+    // optional can skip on it (not-set-up.ts); never retryable.
+    if (refusalSaysNotSetUp(errJson)) {
+      throw carry(notSetUpError(workflowName, errJson, triggerResp.status));
     }
 
     // The child's input schema refused what the parent passed. The platform

@@ -33,6 +33,7 @@ export { WorkflowGraph, WorkflowGraph as Graph } from './graph.js';
 // to multiple child workflows in a loop (the declarative
 // `addNode({ workflow: 'name' })` form only dispatches once per node).
 export { dispatchSubgraph, dispatchParticipant, listParticipants } from './sub-graph-executor.js';
+export { isNotSetUp, SUBGRAPH_NOT_SET_UP } from './not-set-up.js';
 export { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 export { runCollaboration, remainingWorkflowTimeMs } from './collaboration.js';
 export {

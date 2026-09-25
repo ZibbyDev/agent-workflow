@@ -750,11 +750,22 @@ export class WorkflowGraph {
       // A dispatch roster may declare an N-of-M readiness threshold. Without
       // this field every declared child remains required (the historical
       // behavior). Readiness consumers apply it to this node's own roster.
+      // 0 is the OPTIONAL step: none of its members has to be set up — the
+      // step is skipped, with the platform's "not set up" fact, until one is
+      // (a Product Owner's "Ask Council"). The platform, not the node, decides
+      // what "set up" means (not-set-up.ts).
       const minimumReadyChildren = node?.config?.minimumReadyChildren;
       if (minimumReadyChildren != null) {
-        if (!Number.isInteger(minimumReadyChildren) || minimumReadyChildren <= 0) {
+        if (!Number.isInteger(minimumReadyChildren) || minimumReadyChildren < 0) {
           throw new Error(
-            `Node '${nodeId}' minimumReadyChildren must be a positive integer`,
+            `Node '${nodeId}' minimumReadyChildren must be a whole number, 0 (optional) or more`,
+          );
+        }
+        const hasRoster = typeof config.dispatchesWorkflow === 'string'
+          || (Array.isArray(config.dispatchesWorkflow) && config.dispatchesWorkflow.length > 0);
+        if (!hasRoster) {
+          throw new Error(
+            `Node '${nodeId}' declares minimumReadyChildren but no dispatchesWorkflow roster for it to apply to`,
           );
         }
         const dispatchedCount = typeof config.dispatchesWorkflow === 'string'

@@ -47,6 +47,7 @@ import { pathToFileURL } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { logger } from './logger.js';
+import { notSetUpError, refusalSaysNotSetUp } from './not-set-up.js';
 import { runInContext, getExecContext } from './exec-context.js';
 import * as registry from './subgraph-registry.js';
 // The engine's HTTP deadlines live in ONE declaration — see fetch-deadline.ts
@@ -397,6 +398,10 @@ async function callBegin({ apiBase, authToken, body }: any) {
       e.quotaInfo = q;
       throw e;
     }
+    // Not set up: the same refusal the HTTP door gives, typed the same way
+    // (not-set-up.ts). Falling back to HTTP would only ask the same question
+    // twice and get the same answer.
+    if (refusalSaysNotSetUp(json)) throw notSetUpError(body.childWorkflowType, json, resp.status);
     if (resp.status === 400 && json?.validationErrors) {
       const e: any = new Error(`Sub-graph rejected input: ${json?.error || json?.message || 'validation failed'}`);
       e.code = 'SUBGRAPH_INVALID_INPUT';

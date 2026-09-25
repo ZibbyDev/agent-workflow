@@ -131,6 +131,16 @@ describe('runInProcessSubgraph — begin endpoint errors', () => {
     });
   });
 
+  it('a NOT SET UP refusal throws typed SUBGRAPH_NOT_SET_UP (not fallback — the HTTP door would say the same)', async () => {
+    mockFetch(async () => jsonResp({
+      error: 'council-codex: No model set on node "contribute_review" — pick one on it in the agent\'s graph, then re-run.',
+      code: 'MODEL_NOT_SET', notSetUp: true, retryable: false, nodes: ['contribute_review'],
+    }, { ok: false, status: 400 }));
+    const caught: any = await runInProcessSubgraph('council-codex', { input: {} }).catch((e) => e);
+    expect(caught.fallback).toBeUndefined();
+    expect(caught).toMatchObject({ code: 'SUBGRAPH_NOT_SET_UP', notSetUp: true, platformCode: 'MODEL_NOT_SET', nodes: ['contribute_review'] });
+  });
+
   it('5xx falls back', async () => {
     mockFetch(async () => jsonResp({}, { ok: false, status: 503 }));
     await expect(runInProcessSubgraph('child')).rejects.toMatchObject({

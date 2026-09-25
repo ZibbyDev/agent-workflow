@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSubgraph, dispatchParticipant, listParticipants } from '../sub-graph-executor.js';
+import { isNotSetUp } from '../not-set-up.js';
 
 function mockResponse({ ok = true, status = 200, json } = {}) {
   return {
@@ -470,6 +471,27 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
     expect(caught.platformCode).toBe('AGENT_KEY_MISSING');
     expect(caught.message).not.toMatch(/rejected input/);
     expect(caught.message).toContain('Missing ANTHROPIC_API_KEY for claude agent.');
+  });
+
+  it('a member the platform says is NOT SET UP is a typed fact (SUBGRAPH_NOT_SET_UP), never retryable — not a generic dispatch failure', async () => {
+    const said = 'council-gemini: No model set on nodes "contribute_blind", "contribute_review" — pick one on each in the agent\'s graph, then re-run.';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: { error: said, code: 'MODEL_NOT_SET', notSetUp: true, retryable: false, nodes: ['contribute_blind', 'contribute_review'] } }),
+    ));
+    const caught: any = await dispatchSubgraph('council-gemini', { input: {} }).catch((e) => e);
+    expect(caught).toMatchObject({ code: 'SUBGRAPH_NOT_SET_UP', notSetUp: true, platformCode: 'MODEL_NOT_SET', retryable: false, status: 400 });
+    expect(caught.nodes).toEqual(['contribute_blind', 'contribute_review']);
+    expect(caught.message).toContain(said);
+    expect(isNotSetUp(caught)).toBe(true);
+  });
+
+  it('a refusal WITHOUT the platform\'s notSetUp flag is not read as "not set up" (the engine keeps no list of codes)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: { error: 'Missing ANTHROPIC_API_KEY for claude agent.', code: 'AGENT_KEY_MISSING' } }),
+    ));
+    const caught: any = await dispatchSubgraph('child', { input: {} }).catch((e) => e);
+    expect(caught.code).toBe('SUBGRAPH_TRIGGER_FAILED');
+    expect(isNotSetUp(caught)).toBe(false);
   });
 
   it('platform words: a quota 429 still carries the platform code, retryable and message', async () => {
