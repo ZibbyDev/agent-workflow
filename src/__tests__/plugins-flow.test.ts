@@ -56,11 +56,12 @@ describe('node passes config.plugins into strategy options (node.js)', () => {
 });
 
 describe('invokeAgent forwards options.plugins to the chosen strategy (strategy-registry.js)', () => {
-  it('plugins reach strategy.invoke; other strategies simply ignore the field', async () => {
+  it('plugins reach strategy.invoke of an engine that loads them', async () => {
     let seen = null;
     // Minimal AgentStrategy-shaped fake (duck-typed registration).
     const fake = {
       name: 'fake-plugins',
+      loadsPlugins: true,
       getName: () => 'fake-plugins',
       canHandle: () => true,
       invoke: async (_prompt, options) => { seen = options; return 'ok'; },
@@ -72,5 +73,39 @@ describe('invokeAgent forwards options.plugins to the chosen strategy (strategy-
 
     expect(seen).not.toBeNull();
     expect(seen.plugins).toEqual(PLUGINS);
+  });
+
+  // A/B: before refuseUnloadablePlugins, an engine with no plugin loader was
+  // handed the declaration and silently ran the node WITHOUT its method.
+  it('an engine that cannot load plugins is refused, naming the node, the plugin and the engines that can', async () => {
+    let invoked = false;
+    registerStrategy({
+      name: 'fake-no-plugins',
+      getName: () => 'fake-no-plugins',
+      canHandle: () => true,
+      invoke: async () => { invoked = true; return 'ok'; },
+    });
+    const PLUGINS = [{ name: 'product-design', marketplacePath: '/abs/mp' }];
+    const err: any = await invokeAgent('p', { preferredAgent: 'fake-no-plugins', state: {} },
+      { plugins: PLUGINS, model: 'test-model', nodeName: 'audit' }).catch((e) => e);
+    expect(invoked).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe('PLUGIN_NOT_LOADABLE');
+    expect(err.message).toContain('"audit"');
+    expect(err.message).toContain('product-design');
+    expect(err.message).toContain('fake-no-plugins');
+    expect(err.message).toContain('fake-plugins');
+  });
+
+  it('a node without plugins runs on any engine (no refusal)', async () => {
+    let invoked = false;
+    registerStrategy({
+      name: 'fake-no-plugins-2',
+      getName: () => 'fake-no-plugins-2',
+      canHandle: () => true,
+      invoke: async () => { invoked = true; return 'ok'; },
+    });
+    await invokeAgent('p', { preferredAgent: 'fake-no-plugins-2', state: {} }, { model: 'test-model' });
+    expect(invoked).toBe(true);
   });
 });

@@ -88,6 +88,20 @@ export class AgentStrategy {
    */
   async prepare(_context: any = {}) { /* no-op by default */ }
 
+  /**
+   * Can this engine load a node's declared PLUGIN BUNDLE natively?
+   *
+   * A node may declare `plugins: [{ name, marketplacePath }]` — a vendored
+   * bundle of SKILL.md skills (plus references/scripts). Each engine that can
+   * load such a bundle does it in ITS OWN native way (Codex: a local
+   * marketplace install into CODEX_HOME; Claude: a local plugin directory
+   * handed to the Agent SDK) and says so by overriding this to `true`. An
+   * engine left at `false` is REFUSED a node that declares plugins
+   * (refuseUnloadablePlugins) — it never runs without the method the node
+   * was written to follow.
+   */
+  get loadsPlugins(): boolean { return false; }
+
   getName()        { return this.name; }
   getDescription() { return this.description; }
   getPriority()    { return this.priority; }

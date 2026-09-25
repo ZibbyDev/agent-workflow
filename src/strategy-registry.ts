@@ -264,11 +264,40 @@ export function resolveInvocationExtras({ options = {}, stateView = {}, context 
     // into [{serverName, def}] and puts it on state; strategies merge it into
     // their mcpServers map after registry skills. See plans/custom-mcp-per-agent.
     extraMcpServers: options.extraMcpServers || stateView.extraMcpServers || context.extraMcpServers || [],
-    // Native agent plugins (mirrors `skills`). Passed through to the strategy;
-    // only the Codex strategy consumes it (installs into CODEX_HOME), others
-    // ignore it. No prompt fragments derive from plugins.
+    // Native agent plugins (mirrors `skills`). Passed through to the strategy,
+    // which loads the bundle in its own native way (strategy.loadsPlugins);
+    // an engine that cannot is refused (refuseUnloadablePlugins). No prompt
+    // fragments derive from plugins.
     plugins: options.plugins || context.plugins || [],
   };
+}
+
+/**
+ * A node that declares a PLUGIN BUNDLE runs only on an engine that loads it.
+ *
+ * The bundle is the node's method (its skills, references, scripts); running
+ * the node on an engine that silently ignores it would produce an answer made
+ * without the method the prompt names — a quiet wrong result, not a failure.
+ * So an engine whose `loadsPlugins` is not true is refused here, naming the
+ * node, the bundle and the fix. Nothing is chosen for the person: the vendor
+ * stays the one picked on the node.
+ */
+export function refuseUnloadablePlugins(strategy: any, plugins: unknown, nodeName?: string) {
+  const list = Array.isArray(plugins) ? plugins : [];
+  if (list.length === 0) return;
+  if (strategy && strategy.loadsPlugins === true) return;
+  const names = list.map((p: any) => (typeof p === 'string' ? p : p?.name)).filter(Boolean);
+  const vendor = strategy?.name || 'this engine';
+  const loaders = _strategies
+    .filter((s: any) => s && s.loadsPlugins === true)
+    .map((s: any) => s.getName());
+  const err: any = new Error(
+    `Node${nodeName ? ` "${nodeName}"` : ''} follows the ${names.join(', ') || 'declared'} plugin, `
+    + `which the ${vendor} engine cannot load. Pick a vendor that loads plugins on this node`
+    + `${loaders.length ? ` (${loaders.join(', ')})` : ''}, then re-run.`,
+  );
+  err.code = 'PLUGIN_NOT_LOADABLE';
+  throw err;
 }
 
 /**
@@ -395,6 +424,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     ...resolveInvocationExtras({ options, stateView, context }),
     config,
   };
+  refuseUnloadablePlugins(strategy, finalOptions.plugins, options.nodeName);
 
   let enrichedPrompt = prompt;
 
