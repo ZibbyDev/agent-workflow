@@ -36,7 +36,7 @@
  * cannot widen what the node may do.
  */
 
-import { lstatSync, readdirSync, openSync, readSync, closeSync, existsSync } from 'fs';
+import { lstatSync, readdirSync, openSync, readSync, closeSync, existsSync, constants, fstatSync } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute, sep, basename } from 'path';
 
 /**
@@ -94,7 +94,8 @@ const isRealDir = (p: string) => { try { return lstatSync(p).isDirectory(); } ca
 function readHead(path: string, max: number): string {
   let fd: number | null = null;
   try {
-    fd = openSync(path, 'r');
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!fstatSync(fd).isFile()) return '';
     const buf = Buffer.alloc(max);
     const n = readSync(fd, buf, 0, max, 0);
     return buf.subarray(0, n).toString('utf8');
@@ -148,11 +149,23 @@ export function workingChain(dir: string): { root: string; chain: string[]; inRe
 /** The rule files present directly in one directory (no walking), in list order. */
 function ruleFilesIn(dir: string): Array<{ path: string; name: string }> {
   const out: Array<{ path: string; name: string }> = [];
+  // lstat on the final file alone follows symlinked parent directories.
+  // Check every rule-location directory before looking at its contents.
+  const realSubdirectory = (rel: string) => {
+    let current = dir;
+    for (const part of rel.split('/').filter((p) => p && p !== '.')) {
+      current = join(current, part);
+      if (!isRealDir(current)) return false;
+    }
+    return true;
+  };
   for (const entry of REPOSITORY_RULE_FILES) {
     if (entry.file) {
+      if (!realSubdirectory(dirname(entry.file))) continue;
       const p = join(dir, entry.file);
       if (isFile(p)) out.push({ path: p, name: entry.file });
     } else if (entry.dir) {
+      if (!realSubdirectory(entry.dir)) continue;
       const d = join(dir, entry.dir);
       if (!isRealDir(d)) continue;
       let names: string[] = [];
@@ -331,6 +344,11 @@ export function repositoryRulesBlock({ workspace, strategy, env = process.env, r
       { dir: cwd, declared: false },
       ...preparedProjectFolders(env).map((dir) => ({ dir, declared: true })),
       ...named.map((dir) => ({ dir, declared: true })),
+      // A clone tool may have created this checkout in an earlier node. Every
+      // invocation discovers those repositories from the same bounded,
+      // symlink-free workspace walk, without template-specific plumbing.
+      ...subfolders(cwd).filter((dir) => existsSync(join(dir, '.git')))
+        .map((dir) => ({ dir, declared: true })),
     ];
     const files = collectRepositoryRules(roots);
     if (!files.length) return '';

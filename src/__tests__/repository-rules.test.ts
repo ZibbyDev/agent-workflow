@@ -106,6 +106,23 @@ describe('collectRepositoryRules', () => {
     expect(repositoryRulesBlock({ workspace: r, env: {} })).toBe('');
   });
 
+  it.each([
+    ['.claude', 'CLAUDE.md'],
+    ['.github', 'copilot-instructions.md'],
+    ['.cursor', 'rules/style.mdc'],
+    ['.cursor/rules', 'style.mdc'],
+  ])('does not follow a linked rule directory %s', (directory, filename) => {
+    const r = repo();
+    const outside = join(base, 'outside');
+    put(join(outside, filename), 'OUTSIDE_RULE_MUST_NOT_REACH_MODEL');
+    mkdirSync(join(r, directory, '..'), { recursive: true });
+    symlinkSync(outside, join(r, directory));
+    put(join(r, 'AGENTS.md'), 'SAFE_RULE');
+    const block = repositoryRulesBlock({ workspace: r, env: {} });
+    expect(block).toContain('SAFE_RULE');
+    expect(block).not.toContain('OUTSIDE_RULE_MUST_NOT_REACH_MODEL');
+  });
+
   it('caps each file and the whole block; what is left out is named with its path', () => {
     const r = repo();
     put(join(r, 'CLAUDE.md'), `START ${'x'.repeat(RULE_FILE_MAX_BYTES + 5000)} END_OF_BIG_FILE`);
@@ -150,6 +167,20 @@ describe('collectRepositoryRules', () => {
     expect(block).toContain('applies to work under app/');
     // The runner's folder is the working tree even when the working directory is its parent.
     expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');
+  });
+
+  it('discovers a repository cloned by an earlier node inside the run workspace', () => {
+    const work = join(base, 'workspace');
+    mkdirSync(work, { recursive: true });
+    expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');
+    const cloned = join(work, 'checkouts', 'shop');
+    mkdirSync(join(cloned, '.git'), { recursive: true });
+    put(join(cloned, 'CLAUDE.md'), 'CLONED_REPO_NORTH_STAR');
+    put(join(cloned, 'src', 'AGENTS.md'), 'CLONED_REPO_API_RULE');
+    const block = repositoryRulesBlock({ workspace: work, env: {} });
+    expect(block).toContain('CLONED_REPO_NORTH_STAR');
+    expect(block).toContain('CLONED_REPO_API_RULE');
+    expect(block).toContain('applies to work under src/');
   });
 });
 
