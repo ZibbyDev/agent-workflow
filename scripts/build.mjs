@@ -43,8 +43,14 @@ async function collectSourceFiles(dir) {
   return entries;
 }
 
-await rm(outDir, { recursive: true, force: true });
+// Empty dist/ IN PLACE — never remove the directory itself. The local box
+// bind-mounts this directory into running containers; deleting and recreating
+// it leaves every mount pointing at the dead inode ("d?????????" in the
+// container, ERR_MODULE_NOT_FOUND for every template load) until a restart.
 await mkdir(outDir, { recursive: true });
+for (const name of await readdir(outDir)) {
+  await rm(join(outDir, name), { recursive: true, force: true });
+}
 
 const entryPoints = await collectSourceFiles(join(cwd, 'src'));
 if (entryPoints.length === 0) {
