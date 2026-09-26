@@ -16,6 +16,7 @@ import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
+import { repositoryRulesBlock } from './repository-rules.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -524,6 +525,13 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     });
     enrichedPrompt += `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`;
   }
+
+  // THE REPOSITORY'S OWN RULES (CLAUDE.md, AGENTS.md, …) — every model node,
+  // every vendor, the same block; '' when the node works in no repository.
+  // Placed before the operator's override block, which stays last and wins.
+  // One function for both invokeAgent paths (repository-rules.ts).
+  const repositoryRules = repositoryRulesBlock({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots });
+  if (repositoryRules) enrichedPrompt += `\n\n${repositoryRules}`;
 
   const extraInstructions = nodeOverrideInstructions(stateView._currentNodeConfig, { disallowedTools: finalOptions.disallowedTools });
   if (extraInstructions) {

@@ -44,6 +44,18 @@ export class AgentStrategy {
    * @property {string} raw        - Raw agent output
    * @property {object} structured - Parsed and validated output
    */
+  /**
+   * The repository rule files this engine reads BY ITSELF from its working
+   * directory's chain (the repository root down to the working directory) —
+   * names from REPOSITORY_RULE_FILES (repository-rules.ts). invokeAgent sends
+   * every other rule file of the run's working tree in the prompt, and names
+   * these without repeating them. Default: none — the engine gets every rule
+   * file in the prompt. Declare a name ONLY when the engine is started so that
+   * it really loads that file (an engine run with its project settings off
+   * does not).
+   */
+  get nativeRuleFiles(): string[] { return []; }
+
   async invoke(_prompt, _options: any = {}) {
     throw new Error(`${this.constructor.name}.invoke() must be implemented`);
   }

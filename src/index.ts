@@ -104,6 +104,10 @@ export { validateStoreDefs, STORE_NAME_REGEX } from './stores.js';
 export { AgentStrategy } from './agents/base.js';
 export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrategy, invokeAgent, resolveInvocationModel, nodeOwnAgent, requireNodeModel, resolveInvocationExtras, refuseUnloadablePlugins, resolveInvocationEffort, EFFORT_LEVELS, normalizeEffort, DEFAULT_EFFORT_CEILING, effortCeiling, clampEffort, nodeOverrideInstructions, nodeReadsWorkspace, WORKSPACE_READ_TOOLS } from './strategy-registry.js';
 
+// Repository rules — the rule files a repository's owner keeps in it, delivered
+// to every model node the same way whatever its vendor (repository-rules.ts).
+export { REPOSITORY_RULE_FILES, RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, nativelyLoaded, workingChain, preparedProjectFolders, maskCredentials } from './repository-rules.js';
+
 // Code generation (compile graph config to runnable JS)
 export { generateWorkflowCode, generateNodeConfigsJson } from './code-generator.js';
 
