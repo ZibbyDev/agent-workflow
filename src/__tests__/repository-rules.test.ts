@@ -253,10 +253,22 @@ describe('invokeAgent delivers the block', () => {
 });
 
 describe('a node names the checkout it works on', () => {
+  it('discovers the platform checkout cache for the next node without following a linked cache', () => {
+    const work = join(base, 'cached-workspace');
+    const clone = join(work, '.zibby', 'repos', 'svc');
+    mkdirSync(join(clone, '.git'), { recursive: true });
+    put(join(clone, 'CLAUDE.md'), 'CACHED_REPOSITORY_RULE');
+    expect(repositoryRulesBlock({ workspace: work, env: {} })).toContain('CACHED_REPOSITORY_RULE');
+    const linked = join(base, 'linked-cache-workspace');
+    mkdirSync(linked);
+    symlinkSync(join(work, '.zibby'), join(linked, '.zibby'));
+    expect(repositoryRulesBlock({ workspace: linked, env: {} })).toBe('');
+  });
+
   it('repositoryRoots: a checkout outside the working directory (cloned by an earlier model call) is read like a prepared folder', () => {
     const work = join(base, 'workspace');
     mkdirSync(work, { recursive: true });
-    const clone = join(work, '.zibby', 'repos', 'svc');
+    const clone = join(base, 'outside-checkout', 'svc');
     mkdirSync(join(clone, '.git'), { recursive: true });
     put(join(clone, 'AGENTS.md'), 'CLONED_REPOSITORY_RULE');
     expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');

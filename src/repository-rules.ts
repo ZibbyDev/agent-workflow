@@ -180,7 +180,7 @@ function ruleFilesIn(dir: string): Array<{ path: string; name: string }> {
 }
 
 /** Subfolders under `top` (breadth first, bounded), excluding `top` itself. */
-function subfolders(top: string): string[] {
+function subfolders(top: string, includeCheckoutCache = false): string[] {
   const out: string[] = [];
   const queue: Array<{ dir: string; depth: number }> = [{ dir: top, depth: 0 }];
   let scanned = 0;
@@ -193,6 +193,13 @@ function subfolders(top: string): string[] {
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const e of entries) {
       if (!e.isDirectory() || e.isSymbolicLink()) continue;
+      // git_checkout stores repositories here. Hidden configuration/cache
+      // directories otherwise stay outside the walk; only this platform
+      // checkout directory participates in discovery for subsequent nodes.
+      if (includeCheckoutCache && depth === 0 && e.name === '.zibby') {
+        const repos = join(dir, e.name, 'repos');
+        if (isRealDir(repos)) queue.push({ dir: repos, depth: depth + 1 });
+      }
       if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
       const child = join(dir, e.name);
       out.push(child);
@@ -347,7 +354,7 @@ export function repositoryRulesBlock({ workspace, strategy, env = process.env, r
       // A clone tool may have created this checkout in an earlier node. Every
       // invocation discovers those repositories from the same bounded,
       // symlink-free workspace walk, without template-specific plumbing.
-      ...subfolders(cwd).filter((dir) => existsSync(join(dir, '.git')))
+      ...subfolders(cwd, true).filter((dir) => existsSync(join(dir, '.git')))
         .map((dir) => ({ dir, declared: true })),
     ];
     const files = collectRepositoryRules(roots);
