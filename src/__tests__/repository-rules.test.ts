@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import {
   collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, nativelyLoaded,
@@ -275,5 +276,77 @@ describe('a node names the checkout it works on', () => {
     expect(repositoryRulesBlock({ workspace: work, env: {}, repositoryRoots: [clone] })).toContain('CLONED_REPOSITORY_RULE');
     // Only absolute paths; anything else is ignored, never resolved against the working directory.
     expect(repositoryRulesBlock({ workspace: work, env: {}, repositoryRoots: ['.zibby/repos/svc', 42, null] })).toBe('');
+  });
+});
+
+// A REAL git work tree (the fake `.git` folders above are not one; git cannot
+// answer for them, so those tests exercise the no-git behaviour).
+function gitRepo(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['init', '-q', dir]);
+  return dir;
+}
+const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args]);
+const collected = (dirs: Array<{ dir: string; declared?: boolean }>) => collectRepositoryRules(dirs).map((f) => f.path).sort();
+
+describe('collectRepositoryRules honours the repository\'s own ignore rules', () => {
+  it('a rule file copied into a gitignored build-output folder is not a rule of the repository', () => {
+    const r = gitRepo(join(base, 'repo'));
+    put(join(r, '.gitignore'), 'build-out/\n');
+    put(join(r, 'AGENTS.md'), 'ROOT_RULE');
+    put(join(r, 'src', 'AGENTS.md'), 'SRC_RULE');
+    // What a build tool (a CDK asset copy, a bundler) leaves behind: the source, rule files and all.
+    put(join(r, 'build-out', 'asset.x', 'src', 'AGENTS.md'), 'SRC_RULE');
+    expect(collected([{ dir: r }])).toEqual([join(r, 'AGENTS.md'), join(r, 'src', 'AGENTS.md')]);
+    // Same for a prepared project folder and for the one call every node makes.
+    expect(collected([{ dir: r, declared: true }])).toEqual([join(r, 'AGENTS.md'), join(r, 'src', 'AGENTS.md')]);
+    expect(repositoryRulesBlock({ workspace: r, env: {} })).not.toContain('build-out');
+  });
+
+  it('asks git, not a folder-name list: an ignored rule file is dropped, a tracked one in an ignored folder or a tracked `build/` is kept', () => {
+    const r = gitRepo(join(base, 'repo'));
+    put(join(r, '.gitignore'), 'generated/\nlocal/AGENTS.md\n');
+    put(join(r, 'AGENTS.md'), 'ROOT_RULE');
+    put(join(r, 'local', 'AGENTS.md'), 'IGNORED_FILE');
+    put(join(r, 'generated', 'AGENTS.md'), 'FORCE_ADDED');
+    put(join(r, 'generated', 'copy', 'AGENTS.md'), 'IGNORED_COPY');
+    put(join(r, 'build', 'AGENTS.md'), 'TRACKED_BUILD_FOLDER');
+    git(r, 'add', '.gitignore', 'AGENTS.md', 'build/AGENTS.md');
+    git(r, 'add', '-f', 'generated/AGENTS.md');
+    git(r, 'commit', '-qm', 'init');
+    expect(collected([{ dir: r }])).toEqual([
+      join(r, 'AGENTS.md'), join(r, 'build', 'AGENTS.md'), join(r, 'generated', 'AGENTS.md'),
+    ]);
+  });
+
+  it('a nested repository is judged by its own ignore rules, not by its parent\'s', () => {
+    const outer = gitRepo(join(base, 'outer'));
+    put(join(outer, '.gitignore'), 'inner/\n');
+    const inner = gitRepo(join(outer, 'inner'));
+    put(join(inner, '.gitignore'), 'cdk.out/\n');
+    put(join(inner, 'AGENTS.md'), 'INNER_RULE');
+    put(join(inner, 'cdk.out', 'asset.1', 'AGENTS.md'), 'INNER_COPY');
+    expect(collected([{ dir: outer }])).toEqual([join(inner, 'AGENTS.md')]);
+  });
+
+  it('a git worktree (`.git` is a file) is answered the same way', () => {
+    const main = gitRepo(join(base, 'main'));
+    put(join(main, 'README.md'), 'x');
+    git(main, 'add', 'README.md');
+    git(main, 'commit', '-qm', 'init');
+    const wt = join(base, 'wt');
+    git(main, 'worktree', 'add', '-q', wt);
+    put(join(wt, '.gitignore'), 'build-out/\n');
+    put(join(wt, 'AGENTS.md'), 'ROOT_RULE');
+    put(join(wt, 'build-out', 'asset.x', 'AGENTS.md'), 'COPY');
+    expect(collected([{ dir: wt }])).toEqual([join(wt, 'AGENTS.md')]);
+  });
+
+  it('a folder git cannot answer for (no work tree) keeps the previous walk', () => {
+    const plain = join(base, 'plain');
+    put(join(plain, 'AGENTS.md'), 'ROOT_RULE');
+    put(join(plain, 'build-out', 'asset.x', 'AGENTS.md'), 'COPY');
+    put(join(plain, 'dist', 'AGENTS.md'), 'DIST_COPY');
+    expect(collected([{ dir: plain, declared: true }])).toEqual([join(plain, 'AGENTS.md'), join(plain, 'build-out', 'asset.x', 'AGENTS.md')]);
   });
 });
