@@ -227,6 +227,13 @@ function resolvedDispatch(executionId, finalState, output, includeExecutionMetad
  *   THROWS (`code: 'INVALID_EFFORT'`) before anything is started — a bad pick
  *   must be visible to the caller, not silently become the default. Vendors
  *   with no effort control (gemini) log that they ignore it.
+ * @param {{scope: string, continue?: boolean}} [options.session]
+ *   The work item the CHILD's model sessions belong to (e.g. a ticket's
+ *   canonical id). The platform keeps each (agent, work item)'s native
+ *   sessions and, with `continue: true`, has the child continue its latest one
+ *   natively when the facts allow it. Never carries a session id. A malformed
+ *   value THROWS (`code: 'INVALID_SESSION'`) before anything is started; a
+ *   child with a session always runs as its own execution (never in-process).
  * @param {boolean} [options.includeExecutionMetadata=false]
  *   Sync mode only. Return `{ executionId, output }`, where `output` is the
  *   same projected value this call would otherwise return. This exposes the
@@ -272,6 +279,27 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     throw e;
   }
   const effort = effortCheck.effort;
+
+  // ── Session: the work item the CHILD's model sessions belong to ─────────
+  // `{ scope, continue }` — `scope` names the work item (a ticket, a thread),
+  // `continue` asks the platform to continue this child agent's latest native
+  // session on that work item. The platform owns everything else: it keeps the
+  // sessions per (account, agent, scope), resolves WHICH session from its own
+  // records, and the child's runtime continues it only if vendor, step and
+  // file all match (otherwise a fresh start, said on the child's record). No
+  // session id ever travels through here. Shape only — the platform's trigger
+  // is the one that bounds the values.
+  let session: { scope: string; continue: boolean } | null = null;
+  if (options.session !== undefined && options.session !== null) {
+    const s = options.session;
+    const scope = s && typeof s === 'object' && typeof s.scope === 'string' ? s.scope.trim() : '';
+    if (!scope || (s.continue !== undefined && typeof s.continue !== 'boolean')) {
+      const e: any = new Error(`dispatchSubgraph('${workflowName}'): session must be { scope: string, continue?: boolean }`);
+      e.code = 'INVALID_SESSION';
+      throw e;
+    }
+    session = { scope, continue: s.continue === true };
+  }
 
   // ── Auto-supply parentAgent + signal from the running node's context ────
   // A hand-rolled `dispatchSubgraph(slug, { input })` inside a custom execute
@@ -324,6 +352,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     // and must run as its own execution. It can never borrow the parent's
     // process, credentials or custom MCP surface.
     && !options.participantBindingId
+    // A child with a session scope gets its own container: its sessions are
+    // mounted per work item, which a borrowed parent process cannot have.
+    && !session
   ) {
     try {
       logger.debug(`[sub-graph] trying in-process for '${workflowName}'`);
@@ -390,6 +421,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     ...(options.participantBindingId ? { participantBindingId: options.participantBindingId } : {}),
     ...(options.protocolId ? { protocolId: options.protocolId } : {}),
     ...(effort ? { effort } : {}),
+    ...(session ? { session } : {}),
   };
 
   logger.info(`[sub-graph] dispatching '${workflowName}' (${options.async ? 'async' : 'sync'}) from parent ${parentExecutionId || '<none>'}${effort ? ` at effort ${effort}` : ''}`);
