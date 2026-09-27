@@ -17,6 +17,7 @@ import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 import { repositoryRulesBlock } from './repository-rules.js';
+import { runDeadlineSentence } from './run-deadline.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -532,6 +533,12 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // One function for both invokeAgent paths (repository-rules.ts).
   const repositoryRules = repositoryRulesBlock({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots });
   if (repositoryRules) enrichedPrompt += `\n\n${repositoryRules}`;
+
+  // WHEN THIS RUN IS STOPPED — one sentence, every model node, every vendor
+  // (run-deadline.ts; core's invokeAgent appends the same). '' when the run has
+  // no deadline, so a local run's prompt is byte-identical.
+  const deadlineSentence = runDeadlineSentence();
+  if (deadlineSentence) enrichedPrompt += `\n\n${deadlineSentence}`;
 
   const extraInstructions = nodeOverrideInstructions(stateView._currentNodeConfig, { disallowedTools: finalOptions.disallowedTools });
   if (extraInstructions) {
