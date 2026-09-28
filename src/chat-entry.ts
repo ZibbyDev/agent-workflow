@@ -101,6 +101,10 @@ export function renderChatTurn(chat: ChatTurn): string {
     chat.message,
     '>>>',
     '',
+    'While you work, they watch one live line under their message. A sentence you write just before a',
+    'tool call, saying what you are about to do, is what that line shows them; without one it shows only',
+    'the tool\'s name.',
+    '',
     'Your reply is exactly what they will read, so write it to them in plain words. In this conversation',
     'you answer in plain text: any instruction above to answer with a schema or a fixed format does not apply.',
   ].join('\n');

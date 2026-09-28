@@ -99,6 +99,20 @@ describe('a chat turn', () => {
     expect(res.state.chat.message).toBe('what is the status of 12? 顺便把 14 交给 QA');
   });
 
+  it('the chat call tells the model its live line exists — for whichever node declares chatEntry, with no code in that node', async () => {
+    // `manager` here is a generic node, not board-runner's PM: the fact comes
+    // from the ENGINE's chat turn, so every template's chat entry gets it.
+    const calls: any[] = [];
+    const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return 'ok'; });
+    await chatGraph(invokeAgent).run({}, { chat: { message: 'what is next?' } });
+    expect(calls[0].prompt).toMatch(/they watch one live line under their message/);
+    expect(calls[0].prompt).toMatch(/A sentence you write just before a\ntool call, saying what you are about to do, is what that line shows them/);
+    // …and only on a chat turn.
+    const plain: any[] = [];
+    await chatGraph(vi.fn(async (prompt) => { plain.push(prompt); return { raw: '{}', structured: {} }; })).run({}, {});
+    expect(plain[0]).not.toMatch(/live line/);
+  });
+
   it('a run without chat is byte-identical: schema sent, prompt untouched, no replies field', async () => {
     const calls: any[] = [];
     const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return { raw: '{}', structured: {} }; });
