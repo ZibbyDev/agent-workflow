@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { WorkflowGraph } from '../graph.js';
-import { normalizeChatTurn, renderChatTurn, CHAT_CONVERSATION_MAX_CHARS } from '../chat-entry.js';
+import { normalizeChatTurn, renderChatTurn, CHAT_CONVERSATION_MAX_CHARS, CHAT_REPLY_TASTE } from '../chat-entry.js';
 
 function chatGraph(invokeAgent, { declare = true } = {}) {
   const graph = new WorkflowGraph({ invokeAgent });
@@ -154,6 +154,13 @@ describe('normalizeChatTurn / renderChatTurn', () => {
 
   it('says so when it is the first message', () => {
     expect(renderChatTurn({ message: 'hello', conversation: [] })).toContain('first message of the conversation');
+  });
+
+  it('tells every chatted agent a chat reply reads like a coworker, not a report', () => {
+    const block = renderChatTurn({ message: 'hello', conversation: [] });
+    expect(block).toContain(CHAT_REPLY_TASTE);
+    expect(CHAT_REPLY_TASTE).toMatch(/coworker/);
+    expect(block).toContain('they watch one live line');
   });
 
   it('null when the run is not a chat turn; a throw on a malformed one', () => {

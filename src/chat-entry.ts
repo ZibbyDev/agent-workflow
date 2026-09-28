@@ -75,6 +75,15 @@ export function normalizeChatTurn(raw: any): ChatTurn | null {
 }
 
 /**
+ * How a reply in a chat reads (founder, 2026-09-28: "说人话，coworker 一样简洁
+ * to the point"). Without it every directly-chatted agent answered with a
+ * report — headings and numbered lists — for a one-line question. Exported so
+ * the chat-path eval can A/B exactly this text.
+ */
+export const CHAT_REPLY_TASTE =
+  'This is a chat, so reply the way a sharp coworker would: straight to the point, a few short sentences in plain words, the answer first — not a report with headings and sections. Use a list only when what you are saying really is a list of steps or options.';
+
+/**
  * The block appended to the declared node's prompt on a chat turn. The node's
  * own prompt (its role, rules, tools and memory) stays exactly as written; this
  * only says that a person is talking, what was said before, and what they just
@@ -107,6 +116,7 @@ export function renderChatTurn(chat: ChatTurn): string {
     '',
     'Your reply is exactly what they will read, so write it to them in plain words. In this conversation',
     'you answer in plain text: any instruction above to answer with a schema or a fixed format does not apply.',
+    CHAT_REPLY_TASTE,
   ].join('\n');
 }
 
