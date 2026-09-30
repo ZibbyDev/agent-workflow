@@ -411,7 +411,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(proposedExecutionId ? { executionId: proposedExecutionId } : {}),
     ...(getDispatchNodeId() ? { dispatchNodeId: getDispatchNodeId() } : {}),
-    ...(!options.async && typeof options.output === 'string' && options.output.trim()
+    ...(typeof options.output === 'string' && options.output.trim()
       ? { resultPath: options.output.trim() }
       : {}),
     ...(options.conversationId ? { conversationId: options.conversationId } : {}),

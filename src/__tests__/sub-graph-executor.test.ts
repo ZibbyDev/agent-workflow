@@ -66,6 +66,17 @@ describe('dispatchSubgraph — env preconditions', () => {
 });
 
 describe('dispatchSubgraph — async (fire-and-forget) mode', () => {
+  it('preserves the declared result for a parent that reads it after the child ends', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'delegated-work' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await dispatchSubgraph('specialist', { async: true, output: 'handoff.result' });
+
+    // Async changes WHEN the parent reads, not WHAT the child must retain.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).resultPath).toBe('handoff.result');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('POSTs to the trigger endpoint and returns { jobId } without polling', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({ json: { data: { jobId: 'child-job-1' } } }),
