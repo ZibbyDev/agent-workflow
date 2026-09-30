@@ -10,10 +10,11 @@ import { join } from 'path';
 import {
   collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, nativelyLoaded,
   workingChain, preparedProjectFolders, maskCredentials, REPOSITORY_RULE_FILES,
-  RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING,
+  RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, ruleLocationOf,
 } from '../repository-rules.js';
 
 let base: string;
+const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 const put = (path: string, text: string) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); };
 function repo(name = 'repo') {
   const dir = join(base, name);
@@ -47,7 +48,11 @@ describe('collectRepositoryRules', () => {
     expect(files.slice(0, 4).every((f) => f.onChain)).toBe(true);
     const block = renderRepositoryRules(files);
     expect(block).toContain(`Repository rules (from ${join(r, 'CLAUDE.md')})`);
-    expect(block).toContain(`Repository rules (from ${join(r, 'app', 'AGENTS.md')} — applies to work under app/)`);
+    // A subfolder's file is one index line: where it is, the folder it governs.
+    expect(block).toContain(`- ${join(r, 'app', 'AGENTS.md')} — applies to work under ${join(r, 'app')}/`);
+    expect(block).not.toContain('app rule');
+    expect(byName['app:AGENTS.md'].full).toBe(false);
+    expect(byName['.:CLAUDE.md'].full).toBe(true);
     expect(block).not.toContain('not a rule file');
   });
 
@@ -132,11 +137,14 @@ describe('collectRepositoryRules', () => {
     const block = repositoryRulesBlock({ workspace: r, env: {} });
     expect(block).toContain('START');
     expect(block).not.toContain('END_OF_BIG_FILE');
-    expect(block).toContain(`[cut here — the rest is in ${join(r, 'CLAUDE.md')}`);
+    // Nothing silently lost: the cut says where it continues, and the index names it too.
+    const big = Buffer.byteLength(`START ${'x'.repeat(RULE_FILE_MAX_BYTES + 5000)} END_OF_BIG_FILE`);
+    expect(block).toMatch(new RegExp(`\\[cut here — the rest is in ${esc(join(r, 'CLAUDE.md'))}, from byte \\d+ of ${big}; read it before working there\\]`));
+    expect(block).toMatch(new RegExp(`- ${esc(join(r, 'CLAUDE.md'))} \\(in force here — continues after byte \\d+ of ${big}; read the rest\\)`));
     expect(block.length).toBeLessThan(RULES_TOTAL_MAX_BYTES + 3000);
-    // The budget ran out before the subfolder file: named, not sent.
+    // The subfolder file: named on the index, not sent.
     expect(block).not.toContain('DEEP_RULE_TEXT');
-    expect(block).toMatch(new RegExp(`not included here for length[\\s\\S]*${join(r, 'deep', 'CLAUDE.md').replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}`));
+    expect(block).toContain(`- ${join(r, 'deep', 'CLAUDE.md')} — applies to work under ${join(r, 'deep')}/`);
   });
 
   it('masks credential-shaped strings before the text reaches a prompt', () => {
@@ -164,8 +172,8 @@ describe('collectRepositoryRules', () => {
     expect(preparedProjectFolders({ LOCAL_PROJECT_CONTEXT: JSON.stringify({ path: 'relative/path' }) })).toEqual([]);
     const block = repositoryRulesBlock({ workspace: work, env: many });
     expect(block).toContain('PREPARED_FOLDER_RULE');
-    expect(block).toContain('PREPARED_NESTED_RULE');
-    expect(block).toContain('applies to work under app/');
+    expect(block).not.toContain('PREPARED_NESTED_RULE');
+    expect(block).toContain(`- ${join(proj, 'app', 'AGENTS.md')} — applies to work under ${join(proj, 'app')}/`);
     // The runner's folder is the working tree even when the working directory is its parent.
     expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');
   });
@@ -180,8 +188,7 @@ describe('collectRepositoryRules', () => {
     put(join(cloned, 'src', 'AGENTS.md'), 'CLONED_REPO_API_RULE');
     const block = repositoryRulesBlock({ workspace: work, env: {} });
     expect(block).toContain('CLONED_REPO_NORTH_STAR');
-    expect(block).toContain('CLONED_REPO_API_RULE');
-    expect(block).toContain('applies to work under src/');
+    expect(block).toContain(`- ${join(cloned, 'src', 'AGENTS.md')} — applies to work under ${join(cloned, 'src')}/`);
   });
 });
 
@@ -198,7 +205,8 @@ describe('native loading', () => {
     expect(block).not.toContain('ROOT_AGENTS_TEXT');
     expect(block).toContain(`loaded by your engine directly (not repeated here):\n- ${join(r, 'AGENTS.md')}`);
     expect(block).toContain('ROOT_CLAUDE_TEXT');
-    expect(block).toContain('APP_AGENTS_TEXT');
+    // The subfolder's AGENTS.md is not on the engine's chain: still indexed for it.
+    expect(block).toContain(`- ${join(r, 'app', 'AGENTS.md')} — applies to work under ${join(r, 'app')}/`);
     // An engine that loads nothing gets everything.
     const all = repositoryRulesBlock({ workspace: r, strategy: { nativeRuleFiles: [] }, env: {} });
     expect(all).toContain('ROOT_AGENTS_TEXT');
@@ -348,5 +356,129 @@ describe('collectRepositoryRules honours the repository\'s own ignore rules', ()
     put(join(plain, 'build-out', 'asset.x', 'AGENTS.md'), 'COPY');
     put(join(plain, 'dist', 'AGENTS.md'), 'DIST_COPY');
     expect(collected([{ dir: plain, declared: true }])).toEqual([join(plain, 'AGENTS.md'), join(plain, 'build-out', 'asset.x', 'AGENTS.md')]);
+  });
+});
+
+// ── THE WORKSPACE: every folder the run was handed, and the folders above them ──
+// A run sees COPIES of the person's folders; the runner lists the rule files it
+// found above each original (ancestorRuleFiles), mounted at their own paths.
+describe('workspace rules — above the folders, full text vs index', () => {
+  /** home/ws/{CLAUDE.md, repoA, repoB} on "disk" and the run's copies of the two repos. */
+  function workspaceFixture({ gitFolders = true } = {}) {
+    const home = join(base, 'home');
+    const ws = join(home, 'ws');
+    put(join(ws, 'CLAUDE.md'), '# North star\nOWNER_NORTH_STAR');
+    const originals = { a: join(ws, 'repoA'), b: join(ws, 'repoB') };
+    const copies = { a: join(base, 'run', 'tree', 'repoA'), b: join(base, 'run', 'tree', 'repoB') };
+    for (const d of [...Object.values(originals), ...Object.values(copies)]) {
+      mkdirSync(d, { recursive: true });
+      if (gitFolders) mkdirSync(join(d, '.git'));
+    }
+    put(join(copies.a, 'CLAUDE.md'), 'PRIMARY_ROOT_RULE');
+    put(join(copies.a, 'api', 'AGENTS.md'), '# API handlers\nPRIMARY_SUBFOLDER_RULE');
+    put(join(copies.b, 'AGENTS.md'), '---\ndescription: How the other service is built\n---\nOTHER_FOLDER_RULE');
+    const env = (primary: 'a' | 'b' = 'a', ancestors = [join(ws, 'CLAUDE.md')]) => ({
+      LOCAL_PROJECT_CONTEXT: JSON.stringify({ executionId: 'e', workspaces: (['a', 'b'] as const).map((k) => ({
+        id: k, directory: copies[k], originalPath: originals[k], isPrimary: k === primary, ancestorRuleFiles: ancestors,
+      })) }),
+    });
+    const work = join(base, 'run');
+    return { home, ws, originals, copies, env, work };
+  }
+
+  it('a CLAUDE.md ABOVE two sibling repositories reaches the run, in full, once', () => {
+    const { ws, env, work } = workspaceFixture();
+    const block = repositoryRulesBlock({ workspace: work, env: env() });
+    expect(block).toContain('OWNER_NORTH_STAR');
+    expect(block).toContain(`## Repository rules (from ${join(ws, 'CLAUDE.md')} — applies to all work under ${ws}/)`);
+    expect(block.split('OWNER_NORTH_STAR').length).toBe(2);
+    // Outermost first: the owner's north star leads.
+    expect(block.indexOf('OWNER_NORTH_STAR')).toBeLessThan(block.indexOf('PRIMARY_ROOT_RULE'));
+  });
+
+  it('a plain folder (no git) is a workspace folder the same way: the rules above it, its own, and its subfolders indexed', () => {
+    const { ws, copies, env, work } = workspaceFixture({ gitFolders: false });
+    const block = repositoryRulesBlock({ workspace: work, env: env() });
+    expect(block).toContain('OWNER_NORTH_STAR');
+    expect(block).toContain('PRIMARY_ROOT_RULE');
+    expect(block).toContain(`- ${join(copies.a, 'api', 'AGENTS.md')} — applies to work under ${join(copies.a, 'api')}/: API handlers`);
+    expect(block).toContain(`applies to all work under ${ws}/`);
+  });
+
+  it('full text: above + the primary folder\'s chain; index: the other folder\'s own rules and every subfolder rule, with the author\'s own description', () => {
+    const { copies, env, work } = workspaceFixture();
+    const block = repositoryRulesBlock({ workspace: work, env: env('a') });
+    expect(block).toContain('PRIMARY_ROOT_RULE');
+    expect(block).not.toContain('PRIMARY_SUBFOLDER_RULE');
+    expect(block).not.toContain('OTHER_FOLDER_RULE');
+    expect(block).toContain(`- ${join(copies.b, 'AGENTS.md')} — applies to work under ${copies.b}/: How the other service is built`);
+    expect(block).toContain('## Rule files to read before working where they apply');
+    expect(block).toMatch(/Before you work there, read the file/);
+    // Swap the primary: the standings swap with it — by location, not content.
+    const swapped = repositoryRulesBlock({ workspace: work, env: env('b') });
+    expect(swapped).toContain('OTHER_FOLDER_RULE');
+    expect(swapped).not.toContain('PRIMARY_ROOT_RULE');
+    expect(swapped).toContain(`- ${join(copies.a, 'CLAUDE.md')} — applies to work under ${copies.a}/`);
+    expect(swapped).toContain('OWNER_NORTH_STAR');
+  });
+
+  it('with no primary marked, the first folder is the primary (the runner\'s order)', () => {
+    const { copies, originals, work } = workspaceFixture();
+    const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [
+      { directory: copies.b, originalPath: originals.b }, { directory: copies.a, originalPath: originals.a },
+    ] }) };
+    const block = repositoryRulesBlock({ workspace: work, env });
+    expect(block).toContain('OTHER_FOLDER_RULE');
+    expect(block).not.toContain('PRIMARY_ROOT_RULE');
+  });
+
+  it('a file that declares itself always-on (alwaysApply: true) is sent in full wherever it is; one that does not is indexed with its description and globs', () => {
+    const r = repo();
+    put(join(r, 'CLAUDE.md'), 'ROOT');
+    put(join(r, 'app', '.cursor', 'rules', 'always.mdc'), '---\ndescription: house style\nalwaysApply: true\n---\nALWAYS_ON_RULE_TEXT');
+    put(join(r, 'app', '.cursor', 'rules', 'scoped.mdc'), '---\ndescription: "Form components"\nglobs: app/forms/**\nalwaysApply: false\n---\nSCOPED_RULE_TEXT');
+    const block = repositoryRulesBlock({ workspace: r, env: {} });
+    expect(block).toContain('ALWAYS_ON_RULE_TEXT');
+    expect(block).not.toContain('SCOPED_RULE_TEXT');
+    expect(block).toContain(`- ${join(r, 'app', '.cursor', 'rules', 'scoped.mdc')} — applies to work under ${join(r, 'app')}/: Form components (for files matching app/forms/**)`);
+  });
+
+  it('skills are indexed by their own description, never sent whole', () => {
+    const r = repo();
+    put(join(r, '.claude', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: >\n  How to deploy the backend.\n  Use before any deploy.\n---\nSKILL_BODY_TEXT');
+    const block = repositoryRulesBlock({ workspace: r, env: {} });
+    expect(block).not.toContain('SKILL_BODY_TEXT');
+    expect(block).toContain(`- ${join(r, '.claude', 'skills', 'deploy', 'SKILL.md')} — applies to work under ${r}/: How to deploy the backend. Use before any deploy.`);
+  });
+
+  it('the runner\'s list is checked: only list locations, only in folders that really hold the folder, never a symlink', () => {
+    const { home, ws, originals, copies, work } = workspaceFixture();
+    const secret = join(home, 'secret.txt');
+    writeFileSync(secret, 'HOME_SECRET');
+    put(join(home, 'elsewhere', 'CLAUDE.md'), 'UNRELATED_FOLDER_RULE');
+    mkdirSync(join(ws, 'linked'), { recursive: true });
+    symlinkSync(secret, join(ws, 'AGENTS.md'));
+    const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [{ directory: copies.a, originalPath: originals.a, isPrimary: true,
+      ancestorRuleFiles: [secret, join(home, 'elsewhere', 'CLAUDE.md'), join(ws, 'AGENTS.md'), 'relative/CLAUDE.md', `${ws}/../ws/CLAUDE.md`] }] }) };
+    const block = repositoryRulesBlock({ workspace: work, env });
+    expect(block).not.toContain('HOME_SECRET');
+    expect(block).not.toContain('UNRELATED_FOLDER_RULE');
+    expect(block).not.toContain('OWNER_NORTH_STAR'); // un-normalised spelling is refused, not resolved
+    expect(block).toContain('PRIMARY_ROOT_RULE');
+  });
+
+  it('a checkout inside a non-primary folder keeps that folder\'s standing (a worktree has a .git too)', () => {
+    const { copies, env, work } = workspaceFixture();
+    const block = repositoryRulesBlock({ workspace: work, env: env('a') });
+    expect(block).not.toContain('OTHER_FOLDER_RULE');
+    expect(collectRepositoryRules([{ dir: copies.b, declared: true, primary: false }]).every((f) => !f.full)).toBe(true);
+  });
+
+  it('rule-file locations are recognised by the most specific list entry', () => {
+    expect(ruleLocationOf('/w/.claude/CLAUDE.md')).toEqual({ governs: '/w', name: '.claude/CLAUDE.md', onDemand: false });
+    expect(ruleLocationOf('/w/.cursor/rules/a.mdc')).toEqual({ governs: '/w', name: '.cursor/rules/a.mdc', onDemand: false });
+    expect(ruleLocationOf('/w/.claude/skills/x/SKILL.md')).toEqual({ governs: '/w', name: '.claude/skills/x/SKILL.md', onDemand: true });
+    expect(ruleLocationOf('/w/README.md')).toBeNull();
+    expect(ruleLocationOf('/w/../x/CLAUDE.md')).toBeNull();
   });
 });
