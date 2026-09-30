@@ -547,7 +547,11 @@ export class WorkflowGraph {
     return this;
   }
 
-  addConditionalEdges(from, routes, { labels }: any = {}) {
+  // `optional` names the targets whose branch is OPTIONAL — a step the run
+  // may take or skip without the flow depending on it (code-review's Council
+  // consult). Display-only: it rides the serialized edge as `optional: true`
+  // so a viewer can draw it as such; routing never reads it.
+  addConditionalEdges(from, routes, { labels, optional }: any = {}) {
     const existing = this.edges.get(from);
     if (existing !== undefined && !existing.conditional) {
       // Same ambiguity as the addEdge case above, from the other direction.
@@ -556,7 +560,7 @@ export class WorkflowGraph {
         + `(${Array.isArray(existing) ? existing.join(', ') : existing}). A node routes EITHER unconditionally OR conditionally — not both.`,
       );
     }
-    this.edges.set(from, { conditional: true, routes, labels });
+    this.edges.set(from, { conditional: true, routes, labels, optional: Array.isArray(optional) ? [...optional] : [] });
     if (typeof routes === 'function') this.conditionalCodeMap.set(from, routes.toString());
     return this;
   }
@@ -995,9 +999,14 @@ export class WorkflowGraph {
           edges.push({ source: from, target: branchId });
           source = branchId;
         }
+        const strayOptional = (target.optional || []).filter((t) => !possibleTargets.includes(t));
+        if (strayOptional.length) {
+          throw new Error(`addConditionalEdges('${from}', …): optional names ${strayOptional.map((t) => `'${t}'`).join(', ')}, which '${from}' never routes to (its targets: ${possibleTargets.join(', ')})`);
+        }
         for (const t of possibleTargets) {
           const edge: any = { source, target: t, data: { conditionalCode: codeStr } };
           if (labels[t]) edge.label = labels[t];
+          if (target.optional?.includes(t)) edge.optional = true;
           edges.push(edge);
         }
       }
