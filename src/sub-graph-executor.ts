@@ -227,6 +227,11 @@ function resolvedDispatch(executionId, finalState, output, includeExecutionMetad
  *   THROWS (`code: 'INVALID_EFFORT'`) before anything is started — a bad pick
  *   must be visible to the caller, not silently become the default. Vendors
  *   with no effort control (gemini) log that they ignore it.
+ * @param {string} [options.title]
+ *   A short line, written by the dispatcher, saying what this run was asked to
+ *   do. Recorded on the child's execution row for people watching the run
+ *   (the platform owns its length and shape); it never reaches the child's
+ *   input. Omit and the run simply has none.
  * @param {{scope: string, continue?: boolean}} [options.session]
  *   The work item the CHILD's model sessions belong to (e.g. a ticket's
  *   canonical id). The platform keeps each (agent, work item)'s native
@@ -279,6 +284,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     throw e;
   }
   const effort = effortCheck.effort;
+
+  // ── Title: the dispatcher's own line about this run, carried by BOTH paths ─
+  const title = typeof options.title === 'string' ? options.title.trim().slice(0, 200) : '';
 
   // ── Session: the work item the CHILD's model sessions belong to ─────────
   // `{ scope, continue }` — `scope` names the work item (a ticket, a thread),
@@ -365,6 +373,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
         parentAgent: options.parentAgent,
         timeoutMs,
         ...(effort ? { effort } : {}),
+        ...(title ? { title } : {}),
       });
       const extracted = resolvedDispatch(
         executionId, finalState, options.output, options.includeExecutionMetadata === true,
@@ -421,6 +430,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     ...(options.participantBindingId ? { participantBindingId: options.participantBindingId } : {}),
     ...(options.protocolId ? { protocolId: options.protocolId } : {}),
     ...(effort ? { effort } : {}),
+    ...(title ? { title } : {}),
     ...(session ? { session } : {}),
   };
 

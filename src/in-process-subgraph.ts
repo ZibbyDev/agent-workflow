@@ -628,6 +628,8 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
       ...(options.conversationId ? { conversationId: options.conversationId } : {}),
       // Recorded on the child's execution row, same as the HTTP trigger.
       ...(options.effort ? { effort: options.effort } : {}),
+      // The dispatcher's line about this run — same field as the HTTP trigger.
+      ...(options.title ? { title: options.title } : {}),
     },
   });
 
