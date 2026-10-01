@@ -30,6 +30,8 @@
  * double-import overwrite described above — is unchanged. The guard only fires
  * once the loader starts tagging third-party packages with a `source`.
  */
+import { NO_INTEGRATION_TOGGLEABLE_SKILL_IDS } from './constants.js';
+
 const REGISTRY_KEY = Symbol.for('@zibby/agent-workflow.skills');
 const SOURCES_KEY = Symbol.for('@zibby/agent-workflow.skills.sources');
 if (!globalThis[REGISTRY_KEY]) {
@@ -43,6 +45,15 @@ const _registry = globalThis[REGISTRY_KEY];
 // in _registry but ABSENT here was registered by an untagged (first-party)
 // caller — i.e. `source === undefined` (trusted).
 const _sources = globalThis[SOURCES_KEY];
+
+/** One permission decision for both skill preparation and MCP attachment. */
+export function skillEnabledForAgent(skill, id, allowRaw = process.env.WORKFLOW_ENABLED_INTEGRATIONS) {
+  if (typeof allowRaw !== 'string' || allowRaw.trim() === '') return true;
+  const toggleable = skill?.meta?.toggleable === true
+    || (skill?.meta?.toggleable === undefined && NO_INTEGRATION_TOGGLEABLE_SKILL_IDS.includes(id));
+  if (!toggleable) return true;
+  return allowRaw.split(',').some((entry) => entry.trim() === id);
+}
 
 /**
  * Register a skill definition.

@@ -46,6 +46,41 @@ describe('engine collects skill.invokeAgentOptions', () => {
     expect(capturedOpts[0].resume).toBe('abc');
   });
 
+  it('awaits asynchronous preparation before the model receives a skill', async () => {
+    let ready = false;
+    registerSkill({
+      id: 'test-async-preparation',
+      meta: { toggleable: true },
+      invokeAgentOptions: async () => { await Promise.resolve(); ready = true; return {}; },
+    });
+    const graph = new WorkflowGraph({ invokeAgent: vi.fn(async () => {
+      expect(ready).toBe(true);
+      return { success: true, output: {} };
+    }) });
+    graph.addNode('n', { name: 'n', skills: ['test-async-preparation'], _isCustomCode: true,
+      async execute(ctx) { await ctx._coreInvokeAgent('hi', ctx, {}); return { success: true, output: {} }; } });
+    graph.setEntryPoint('n'); graph.addEdge('n', 'END');
+    await graph.run({}, {});
+  });
+
+  it('does not prepare a disabled toggleable skill', async () => {
+    const hook = vi.fn(async () => ({}));
+    registerSkill({ id: 'test-disabled-preparation', meta: { toggleable: true }, invokeAgentOptions: hook });
+    const before = process.env.WORKFLOW_ENABLED_INTEGRATIONS;
+    process.env.WORKFLOW_ENABLED_INTEGRATIONS = 'github';
+    try {
+      const graph = new WorkflowGraph({ invokeAgent });
+      graph.addNode('n', { name: 'n', skills: ['test-disabled-preparation'], _isCustomCode: true,
+        async execute(ctx) { await ctx._coreInvokeAgent('hi', ctx, {}); return { success: true, output: {} }; } });
+      graph.setEntryPoint('n'); graph.addEdge('n', 'END');
+      await graph.run({}, {});
+      expect(hook).not.toHaveBeenCalled();
+    } finally {
+      if (before === undefined) delete process.env.WORKFLOW_ENABLED_INTEGRATIONS;
+      else process.env.WORKFLOW_ENABLED_INTEGRATIONS = before;
+    }
+  });
+
   it('passes state + ctx (agentType, nodeName) to the hook', async () => {
     const hook = vi.fn(() => null);
     registerSkill({ id: 'test-injector-2', invokeAgentOptions: hook });

@@ -92,7 +92,7 @@ export { CHAT_ENTRY_FLAG, declaresChatEntry, normalizeChatTurn, renderChatTurn, 
 export type { ChatTurn, ChatLine } from './chat-entry.js';
 
 // Skill registry
-export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills } from './skill-registry.js';
+export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills, skillEnabledForAgent } from './skill-registry.js';
 
 // Tool resolution
 export { resolveNodeTools, getResolvedToolDefinitions, NODE_DEFAULT_TOOLS } from './tool-resolver.js';

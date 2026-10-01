@@ -1479,7 +1479,7 @@ export class WorkflowGraph {
     // instantiate each skill's middleware once per run.
     const _skillMiddleware = new Map();
     try { await import('@zibby/skills'); } catch { /* @zibby/skills not installed */ }
-    const { getSkill } = await import('./skill-registry.js');
+    const { getSkill, skillEnabledForAgent } = await import('./skill-registry.js');
 
     // Per-run merged skill registry: user's config.skills (declarative,
     // stateful — e.g. sessionSkill({ store: ... })) overrides builtins on
@@ -1669,8 +1669,11 @@ export class WorkflowGraph {
       for (const id of nodeSkillIds) {
         const skill = resolveSkill(id);
         if (typeof skill?.invokeAgentOptions !== 'function') continue;
+        // Preparation must obey the same declaration-driven toggle as MCP
+        // attachment. Otherwise a disabled skill can still download a binary.
+        if (!skillEnabledForAgent(skill, id)) continue;
         try {
-          const opts = skill.invokeAgentOptions(state.getAll(), {
+          const opts = await skill.invokeAgentOptions(state.getAll(), {
             agentType: state.get('agentType'),
             nodeName: currentNode,
           });
