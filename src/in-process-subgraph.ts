@@ -630,6 +630,8 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
       ...(options.effort ? { effort: options.effort } : {}),
       // The dispatcher's line about this run — same field as the HTTP trigger.
       ...(options.title ? { title: options.title } : {}),
+      // …and what it says to the child as it hands the work over — same field as the HTTP trigger.
+      ...(options.handoff ? { handoff: options.handoff } : {}),
     },
   });
 

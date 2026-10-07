@@ -232,6 +232,11 @@ function resolvedDispatch(executionId, finalState, output, includeExecutionMetad
  *   do. Recorded on the child's execution row for people watching the run
  *   (the platform owns its length and shape); it never reaches the child's
  *   input. Omit and the run simply has none.
+ * @param {string} [options.handoff]
+ *   What the dispatcher says to the child as it hands the work over — one
+ *   sentence in its own words. Recorded on the child's execution row beside
+ *   the title, for people watching the hand-off (the platform owns its length
+ *   and shape); like the title, it never reaches the child's input.
  * @param {{scope: string, continue?: boolean}} [options.session]
  *   The work item the CHILD's model sessions belong to (e.g. a ticket's
  *   canonical id). The platform keeps each (agent, work item)'s native
@@ -287,6 +292,8 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
 
   // ── Title: the dispatcher's own line about this run, carried by BOTH paths ─
   const title = typeof options.title === 'string' ? options.title.trim().slice(0, 200) : '';
+  // ── Hand-off: what it says to the child as it hands the work over, same door ─
+  const handoff = typeof options.handoff === 'string' ? options.handoff.trim().slice(0, 400) : '';
 
   // ── Session: the work item the CHILD's model sessions belong to ─────────
   // `{ scope, continue }` — `scope` names the work item (a ticket, a thread),
@@ -374,6 +381,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
         timeoutMs,
         ...(effort ? { effort } : {}),
         ...(title ? { title } : {}),
+        ...(handoff ? { handoff } : {}),
       });
       const extracted = resolvedDispatch(
         executionId, finalState, options.output, options.includeExecutionMetadata === true,
@@ -431,6 +439,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     ...(options.protocolId ? { protocolId: options.protocolId } : {}),
     ...(effort ? { effort } : {}),
     ...(title ? { title } : {}),
+    ...(handoff ? { handoff } : {}),
     ...(session ? { session } : {}),
   };
 

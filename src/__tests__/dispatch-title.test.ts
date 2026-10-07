@@ -72,3 +72,70 @@ describe('in-process child — title is recorded at begin', () => {
     expect(calls.find((c) => c.url.endsWith('/begin')).body.title).toBe('Fix the login redirect');
   });
 });
+
+/**
+ * The dispatcher's HAND-OFF — what it says to the child as it hands the work
+ * over, in its own words. A second fact about the dispatch, beside the title:
+ * recorded on the child's row for the people watching (the office plays it as
+ * the hand-off), never inside the child's input.
+ */
+describe('dispatchSubgraph — handoff on the HTTP trigger', () => {
+  beforeEach(() => { process.env.ZIBBY_INPROCESS_SUBGRAPH = '0'; });
+
+  it('sends the trimmed handoff beside the input and the title', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ data: { jobId: 'j1' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await dispatchSubgraph('developer', { input: { instruction: 'x' }, async: true, title: 'Fix the redirect', handoff: '  Ivy, the login redirect loops after SSO — can you take it?  ' });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.handoff).toBe('Ivy, the login redirect loops after SSO — can you take it?');
+    expect(body.title).toBe('Fix the redirect');
+    expect(body.input).toEqual({ instruction: 'x' });
+  });
+
+  it('omits the field when there is no handoff, or it is not text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ data: { jobId: 'j1' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await dispatchSubgraph('developer', { input: {}, async: true });
+    await dispatchSubgraph('developer', { input: {}, async: true, handoff: '   ' });
+    await dispatchSubgraph('developer', { input: {}, async: true, handoff: { a: 1 } });
+    for (const call of fetchMock.mock.calls) expect('handoff' in JSON.parse(call[1].body)).toBe(false);
+  });
+});
+
+describe('in-process child — handoff is recorded at begin', () => {
+  const tag = () => `node${(process.versions?.node || '').split('.')[0]}-${process.platform}-${process.arch}`;
+
+  it('carries the handoff in the begin body', async () => {
+    const calls: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, opts: any) => {
+      calls.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return json({ childExecutionId: 'c1', runtimeTag: tag(), bundlePresignedUrl: 'https://x/b.tgz', workflowUuid: 'u', workflowVersion: 1, bundleReady: true });
+      }
+      return json({ ok: true });
+    }));
+    registry.register('dev', class {
+      buildGraph() { return { run: async () => ({ success: true, state: {} }) }; }
+    });
+    await runInProcessSubgraph('dev', { input: {}, handoff: 'Over to you on the redirect.' });
+    expect(calls.find((c) => c.url.endsWith('/begin')).body.handoff).toBe('Over to you on the redirect.');
+  });
+
+  it('the in-process attempt is handed the handoff by dispatchSubgraph', async () => {
+    process.env.ZIBBY_INPROCESS_SUBGRAPH = '1';
+    const calls: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, opts: any) => {
+      calls.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith('/internal/subgraph/begin')) {
+        return json({ childExecutionId: 'c1', runtimeTag: tag(), bundlePresignedUrl: 'https://x/b.tgz', workflowUuid: 'u', workflowVersion: 1, bundleReady: true });
+      }
+      return json({ ok: true });
+    }));
+    registry.register('dev', class {
+      buildGraph() { return { run: async () => ({ success: true, state: {} }) }; }
+    });
+    await dispatchSubgraph('dev', { input: {}, handoff: 'Over to you on the redirect.' }).catch(() => {});
+    const begin = calls.find((c) => c.url.endsWith('/begin'));
+    expect(begin && begin.body.handoff).toBe('Over to you on the redirect.');
+  });
+});
