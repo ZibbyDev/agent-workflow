@@ -547,6 +547,35 @@ describe('the run\'s project folders and their access — a standing fact for ev
     expect(block.split('\n')).toHaveLength(2 + 4);
   });
 
+  it('the files mounted OUTSIDE the folders — the rule files above them and the documents those link to — are named, at their own paths (587, 2026-10-08)', () => {
+    // The block said "Paths outside these folders are unavailable here." while the
+    // runner mounts the workspace's rule files and the documents they link to at
+    // their own paths. A developer told to read ENGINEERING_STANDARDS.md first
+    // looked for it under the folders, did not find it and handed back blocked;
+    // the file was mounted at /Users/…/ENGINEERING_STANDARDS.md the whole time.
+    const withRules = manifest([
+      { originalPath: '/Users/example/app/selfhosted', directory: '/workspace/local-project/tree/selfhosted', isPrimary: true, access: 'editable',
+        ancestorRuleFiles: ['/Users/example/app/AGENTS.md', '/Users/example/app/ENGINEERING_STANDARDS.md'] },
+      { originalPath: '/Users/example/app/backend', directory: '/workspace/local-project/tree/backend', access: 'read-only',
+        ancestorRuleFiles: ['/Users/example/app/AGENTS.md', '/Users/example/app/ENGINEERING_STANDARDS.md', '/Users/example/app/plans/north-star.md'] },
+    ]);
+    const block = preparedFoldersBlock(withRules);
+    // The unconditional sentence is not said when it is not true.
+    expect(block).not.toContain('Paths outside these folders are unavailable here.');
+    expect(block).toContain('Paths outside these folders are unavailable here, except the files listed after the folders');
+    // Each file once, in the runner's order, after the folders.
+    const lines = block.split('\n');
+    expect(lines.slice(5)).toEqual([
+      '- /Users/example/app/AGENTS.md',
+      '- /Users/example/app/ENGINEERING_STANDARDS.md',
+      '- /Users/example/app/plans/north-star.md',
+    ]);
+    expect(lines[4]).toMatch(/at the same path as on the person's computer and read-only/);
+    expect(block).not.toMatch(/\b(you must|do not|never|always|should|manager|developer|ask the)\b/i);
+    // No such file, the sentence stands and nothing is added (byte-identical to before).
+    expect(preparedFoldersBlock(four)).toContain('Paths outside these folders are unavailable here. ');
+  });
+
   it('no prepared folder, no claim: a run without folders gets no block', () => {
     expect(preparedFoldersBlock({})).toBe('');
     expect(preparedFoldersBlock({ LOCAL_PROJECT_CONTEXT: 'invalid' })).toBe('');

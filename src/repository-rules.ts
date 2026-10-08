@@ -567,15 +567,32 @@ export const PREPARED_FOLDERS_HEADING = '## PROJECT FOLDERS AVAILABLE IN THIS RU
  *
  * FACTS ONLY: what the two words mean, and when they were read. What an agent
  * does about a folder it cannot change is its own judgement.
+ *
+ * THE FILES OUTSIDE THE FOLDERS. The runner also mounts, read-only and at their
+ * own paths, the workspace's rule files found above the folders and the
+ * documents those link to (manifest `ancestorRuleFiles`). The block said
+ * "Paths outside these folders are unavailable here" regardless, and a member
+ * believed it: told by a rule file to read a sibling document first, it looked
+ * under the folders, found nothing and handed its ticket back blocked — the
+ * document was mounted the whole time (587 on 2026-10-08,
+ * run_log/magnum/2026-10-08-rule-document-mounted-but-called-unavailable).
+ * So when there are such files the sentence names the exception and the files
+ * follow the folders, each once, in the runner's order.
  */
 export function preparedFoldersBlock(env: Record<string, string | undefined> = process.env): string {
   let folders: PreparedWorkspace[] = [];
   try { folders = preparedWorkspaces(env).filter((w) => w.originalPath); } catch { return ''; }
   if (!folders.length) return '';
+  const outside = [...new Set(preparedWorkspaces(env).flatMap((w) => w.ancestorRuleFiles))];
   return [PREPARED_FOLDERS_HEADING,
-    'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. Paths outside these folders are unavailable here. '
+    'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. '
+    + (outside.length ? 'Paths outside these folders are unavailable here, except the files listed after the folders. ' : 'Paths outside these folders are unavailable here. ')
     + 'The word after each folder is its access as this run was given it when it started: editable — files there can be changed and saved work can land in it; read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it.',
     ...folders.map((w) => `- ${w.originalPath} → ${w.directory} (${w.access})`),
+    ...(outside.length ? [
+      'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',
+      ...outside.map((f) => `- ${f}`),
+    ] : []),
   ].join('\n');
 }
 
