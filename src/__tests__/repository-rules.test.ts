@@ -129,22 +129,45 @@ describe('collectRepositoryRules', () => {
     expect(block).not.toContain('OUTSIDE_RULE_MUST_NOT_REACH_MODEL');
   });
 
-  it('caps each file and the whole block; what is left out is named with its path', () => {
+  it('bounds the whole block; a file cut for room says which bytes are above and where the remainder starts', () => {
     const r = repo();
-    put(join(r, 'CLAUDE.md'), `START ${'x'.repeat(RULE_FILE_MAX_BYTES + 5000)} END_OF_BIG_FILE`);
-    put(join(r, 'AGENTS.md'), `A ${'y'.repeat(RULE_FILE_MAX_BYTES - 100)}`);
+    const bigText = `START ${'x'.repeat(RULES_TOTAL_MAX_BYTES)} END_OF_BIG_FILE`;
+    put(join(r, 'CLAUDE.md'), bigText);
+    put(join(r, 'AGENTS.md'), `A ${'y'.repeat(20_000)}`);
     put(join(r, 'deep', 'CLAUDE.md'), 'DEEP_RULE_TEXT');
     const block = repositoryRulesBlock({ workspace: r, env: {} });
     expect(block).toContain('START');
     expect(block).not.toContain('END_OF_BIG_FILE');
-    // Nothing silently lost: the cut says where it continues, and the index names it too.
-    const big = Buffer.byteLength(`START ${'x'.repeat(RULE_FILE_MAX_BYTES + 5000)} END_OF_BIG_FILE`);
-    expect(block).toMatch(new RegExp(`\\[cut here — the rest is in ${esc(join(r, 'CLAUDE.md'))}, from byte \\d+ of ${big}; read it before working there\\]`));
-    expect(block).toMatch(new RegExp(`- ${esc(join(r, 'CLAUDE.md'))} \\(in force here — continues after byte \\d+ of ${big}; read the rest\\)`));
+    // Nothing silently lost: the cut says what is above and where the rest starts, and the index names it too.
+    const big = Buffer.byteLength(bigText);
+    const sent = RULES_TOTAL_MAX_BYTES - Buffer.byteLength(`A ${'y'.repeat(20_000)}`);
+    expect(block).toContain(`[cut here — bytes 1–${sent} of ${big} are above; the remaining ${big - sent} bytes are in ${join(r, 'CLAUDE.md')} from byte ${sent + 1}; read them before working there]`);
+    expect(block).toContain(`- ${join(r, 'CLAUDE.md')} (in force here — its first ${sent} of ${big} bytes are above; read only the remaining ${big - sent}, from byte ${sent + 1})`);
     expect(block.length).toBeLessThan(RULES_TOTAL_MAX_BYTES + 3000);
     // The subfolder file: named on the index, not sent.
     expect(block).not.toContain('DEEP_RULE_TEXT');
     expect(block).toContain(`- ${join(r, 'deep', 'CLAUDE.md')} — applies to work under ${join(r, 'deep')}/`);
+  });
+
+  // A/B — run_log/magnum/2026-10-08-member-context-size. The owner's rule file
+  // on the box is 32 271 bytes; the block sent 32 000 of them, cut the last 271
+  // and listed the file under "read the rest", and members read the whole file
+  // again to get them. Fails before this change (the file is cut 271 bytes
+  // short and a "read" line is added for it), passes after.
+  it('a rule file that fits the room arrives whole — no cut 271 bytes short of the end, no instruction to read it again', () => {
+    const r = repo();
+    const head = '# North star\n';
+    const text = `${head}${'r'.repeat(32_271 - Buffer.byteLength(head) - 'LAST_RULE_OF_THE_FILE'.length)}LAST_RULE_OF_THE_FILE`;
+    expect(Buffer.byteLength(text)).toBe(32_271);
+    put(join(r, 'AGENTS.md'), 'ENTRY_POINT '.repeat(150));           // 1.8 kB beside it, as on the box
+    put(join(r, 'CLAUDE.md'), text);
+    const block = repositoryRulesBlock({ workspace: r, env: {} });
+    expect(block).toContain('LAST_RULE_OF_THE_FILE');
+    expect(block).not.toContain('cut here');
+    expect(block).not.toContain('read only the remaining');
+    expect(block).not.toContain('read the rest');
+    // Whole files have no index line: nothing tells the reader to open them again.
+    expect(block).not.toContain('## Rule files to read before working where they apply');
   });
 
   it('masks credential-shaped strings before the text reaches a prompt', () => {

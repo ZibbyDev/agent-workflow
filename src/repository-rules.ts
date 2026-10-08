@@ -100,15 +100,25 @@ export const REPOSITORY_RULE_FILES: ReadonlyArray<RuleLocation> = Object.freeze(
 /** The same list under the workspace name. */
 export const WORKSPACE_RULE_FILES = REPOSITORY_RULE_FILES;
 
-/**
- * Bytes of one rule file sent in full; past it the block says where the file
- * continues. Sized so an owner's whole north-star file (the real one this was
- * built for is 27 kB) arrives uncut: subfolder files, other folders' files and
- * skills now cost one index line each, not their text.
- */
-export const RULE_FILE_MAX_BYTES = 32_000;
 /** Bytes of full rule text per invocation, all files together (~12k tokens). */
 export const RULES_TOTAL_MAX_BYTES = 48_000;
+/**
+ * Bytes of ONE rule file sent in full: whatever of the invocation's room is
+ * left — a file has no smaller limit of its own.
+ *
+ * It used to be a number of its own (32 000, "sized so an owner's whole
+ * north-star file — 27 kB — arrives uncut"). The owner's file grew to 32 271
+ * bytes, so the block sent 32 000, cut the last 271 and told every member to
+ * "read the rest" — and to get those 271 bytes members read the whole file
+ * again with their own tools (32 kB a time, up to three times a run, each copy
+ * re-sent on every later model request; run_log/magnum/
+ * 2026-10-08-member-context-size). A limit that sits just under the file it
+ * was sized for takes nothing off the prompt and costs a second copy of the
+ * file. The room is one number now; a file is cut only where the invocation
+ * really has no room left, and the cut says exactly which bytes are missing.
+ * (The export stays: the public API is stable.)
+ */
+export const RULE_FILE_MAX_BYTES = RULES_TOTAL_MAX_BYTES;
 
 const MAX_DEEPER_DEPTH = 4;
 const MAX_DIRS_SCANNED = 500;
@@ -667,9 +677,9 @@ export const WORKSPACE_RULES_HEADING = REPOSITORY_RULES_HEADING;
  * node that works in no workspace with rules gets nothing, byte for byte. PURE.
  *
  * `native` = paths the node's engine already loads (listed, content not
- * repeated). Full files are included in order up to RULE_FILE_MAX_BYTES each
- * and RULES_TOTAL_MAX_BYTES together; a file cut short says where it
- * continues, a full file with no room left and every indexed file get one
+ * repeated). Full files are included in order while RULES_TOTAL_MAX_BYTES has
+ * room; a file cut short says which bytes are above and where the remainder
+ * starts, a full file with no room left and every indexed file get one
  * index line — the path, the folder it governs, the author's own description.
  */
 export function renderRepositoryRules(files: RuleFile[], { native = new Set<string>() }: { native?: Set<string> } = {}): string {
@@ -689,9 +699,12 @@ export function renderRepositoryRules(files: RuleFile[], { native = new Set<stri
     const cut = sent < Math.max(f.bytes, Buffer.byteLength(f.text));
     budget -= sent;
     const size = Math.max(f.bytes, Buffer.byteLength(f.text));
+    // A CUT NAMES WHAT IS MISSING, NOT THE WHOLE FILE. "Read the rest" beside a
+    // path reads as "read the file": say how much is already above and where
+    // the remainder starts, so the reader fetches only that.
     sections.push(`## Repository rules (from ${f.path}${scopeLabel(f)})\n\n${body.trimEnd()}${cut
-      ? `\n\n[cut here — the rest is in ${f.path}, from byte ${sent} of ${size}; read it before working there]` : ''}`);
-    if (cut) index.push(`${f.path}${scopeLabel(f)} (in force here — continues after byte ${sent} of ${size}; read the rest)`);
+      ? `\n\n[cut here — bytes 1–${sent} of ${size} are above; the remaining ${size - sent} bytes are in ${f.path} from byte ${sent + 1}; read them before working there]` : ''}`);
+    if (cut) index.push(`${f.path}${scopeLabel(f)} (in force here — its first ${sent} of ${size} bytes are above; read only the remaining ${size - sent}, from byte ${sent + 1})`);
   }
   const intro = `${REPOSITORY_RULES_HEADING}
 
