@@ -11,6 +11,7 @@ import {
   collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, nativelyLoaded,
   workingChain, preparedProjectFolders, maskCredentials, REPOSITORY_RULE_FILES,
   RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, ruleLocationOf,
+  preparedWorkspaces, preparedFoldersBlock, PREPARED_FOLDERS_HEADING,
 } from '../repository-rules.js';
 
 let base: string;
@@ -503,5 +504,93 @@ describe('workspace rules — above the folders, full text vs index', () => {
     expect(ruleLocationOf('/w/.claude/skills/x/SKILL.md')).toEqual({ governs: '/w', name: '.claude/skills/x/SKILL.md', onDemand: true });
     expect(ruleLocationOf('/w/README.md')).toBeNull();
     expect(ruleLocationOf('/w/../x/CLAUDE.md')).toBeNull();
+  });
+});
+
+// A/B — run_log/magnum/2026-10-08-settings-folder-change-tells-no-one (v2).
+// A project folder's access was told to a run in parts or not at all: the
+// manifest reader dropped the field, the fleet manager's own list showed paths
+// only, and the executor named the read-only folders to nodes that read files.
+// Now it is one standing block, from the manifest, for every model node of a
+// run that has folders. Every case below fails before this change (no
+// `access` on a prepared workspace, no preparedFoldersBlock, nothing appended).
+describe('the run\'s project folders and their access — a standing fact for every agent', () => {
+  const manifest = (workspaces: any[]) => ({ LOCAL_PROJECT_CONTEXT: JSON.stringify({ executionId: 'run-1', workspaces }) });
+  const four = manifest([
+    { originalPath: '/Users/example/app/selfhosted', directory: '/workspace/local-project/tree/selfhosted', isPrimary: true, access: 'editable' },
+    { originalPath: '/Users/example/app/backend', directory: '/workspace/local-project/tree/backend', access: 'read-only' },
+    { originalPath: '/Users/example/app/plans', directory: '/workspace/local-project/tree/plans', access: 'read-only' },
+    { originalPath: '/Users/example/app/packages/workflow-templates', directory: '/workspace/local-project/tree/packages/workflow-templates', access: 'editable' },
+  ]);
+
+  it('the manifest reader carries each folder\'s access: read-only when the runner says so, editable otherwise', () => {
+    expect(preparedWorkspaces(four).map((w) => w.access)).toEqual(['editable', 'read-only', 'read-only', 'editable']);
+    // A runner from before the field existed only ever prepared editable folders.
+    expect(preparedWorkspaces(manifest([{ directory: '/w/a', originalPath: '/Users/example/a' }]))[0].access).toBe('editable');
+    // Anything that is not the runner's own word for read-only is not read as read-only.
+    expect(preparedWorkspaces(manifest([{ directory: '/w/a', access: 'READ-ONLY' }, { directory: '/w/b', access: true }])).map((w) => w.access)).toEqual(['editable', 'editable']);
+    expect(preparedWorkspaces({ LOCAL_PROJECT_CONTEXT: JSON.stringify({ path: '/workspace/local-project/project' }) })[0].access).toBe('editable');
+  });
+
+  it('one block: the person\'s path, its prepared path and its access for every folder, and what the two words mean — as facts', () => {
+    const block = preparedFoldersBlock(four);
+    expect(block.startsWith(PREPARED_FOLDERS_HEADING)).toBe(true);
+    expect(block).toContain('- /Users/example/app/selfhosted → /workspace/local-project/tree/selfhosted (editable)');
+    expect(block).toContain('- /Users/example/app/backend → /workspace/local-project/tree/backend (read-only)');
+    expect(block).toContain('- /Users/example/app/plans → /workspace/local-project/tree/plans (read-only)');
+    expect(block).toContain('- /Users/example/app/packages/workflow-templates → /workspace/local-project/tree/packages/workflow-templates (editable)');
+    expect(block).toMatch(/as this run was given it when it started/);
+    expect(block).toMatch(/editable — files there can be changed and saved work can land in it/);
+    expect(block).toMatch(/read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it/);
+    // Facts, not instructions, and no agent named.
+    expect(block).not.toMatch(/\b(you must|do not|never|always|should|manager|developer|ask the)\b/i);
+    expect(block.split('\n')).toHaveLength(2 + 4);
+  });
+
+  it('no prepared folder, no claim: a run without folders gets no block', () => {
+    expect(preparedFoldersBlock({})).toBe('');
+    expect(preparedFoldersBlock({ LOCAL_PROJECT_CONTEXT: 'invalid' })).toBe('');
+    // A committed snapshot names no folder by the person's own path.
+    expect(preparedFoldersBlock({ LOCAL_PROJECT_CONTEXT: JSON.stringify({ path: '/workspace/local-project/project' }) })).toBe('');
+  });
+
+  describe('invokeAgent appends it for every vendor', () => {
+    const saved = { ...process.env };
+    afterEach(() => {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    });
+
+    it('with folders: the block, once; without: a byte-identical prompt', async () => {
+      vi.resetModules();
+      const KEY = Symbol.for('@zibby/agent-workflow.strategies');
+      if (Array.isArray((globalThis as any)[KEY])) (globalThis as any)[KEY].length = 0;
+      const { AgentStrategy } = await import('../agents/base.js');
+      const reg = await import('../strategy-registry.js');
+      class Fake extends AgentStrategy {
+        captured: string | null = null;
+        constructor(name: string) { super(name, name, 0); }
+        getName() { return this.name; }
+        canHandle() { return true; }
+        async invoke(prompt: string) { this.captured = prompt; return 'ok'; }
+      }
+      const a = new Fake('alpha'); const b = new Fake('beta');
+      reg.registerStrategy(a); reg.registerStrategy(b);
+      const empty = mkdtempSync(join(tmpdir(), 'rules-none-'));   // a working directory with no rule files
+      delete process.env.RUN_DEADLINE_AT; delete process.env.MAX_WORKFLOW_DURATION_MS;
+
+      process.env.LOCAL_PROJECT_CONTEXT = four.LOCAL_PROJECT_CONTEXT;
+      await reg.invokeAgent('task', { preferredAgent: 'alpha', state: {} }, { model: 'm', workspace: empty });
+      await reg.invokeAgent('task', { preferredAgent: 'beta', state: {} }, { model: 'm', workspace: empty });
+      for (const f of [a, b]) {
+        expect(f.captured).toContain(preparedFoldersBlock(four));
+        expect(f.captured!.split(PREPARED_FOLDERS_HEADING)).toHaveLength(2);
+      }
+
+      delete process.env.LOCAL_PROJECT_CONTEXT;
+      await reg.invokeAgent('task', { preferredAgent: 'alpha', state: {} }, { model: 'm', workspace: empty });
+      expect(a.captured).toBe('task');
+      rmSync(empty, { recursive: true, force: true });
+    });
   });
 });

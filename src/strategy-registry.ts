@@ -16,7 +16,7 @@ import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
-import { repositoryRulesBlock } from './repository-rules.js';
+import { repositoryRulesBlock, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
@@ -526,6 +526,13 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     });
     enrichedPrompt += `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`;
   }
+
+  // THE RUN'S PROJECT FOLDERS AND THEIR ACCESS — a standing fact for every
+  // model node of a run that was handed folders, read from the manifest the
+  // runner mounted from; '' when it prepared none (repository-rules.ts
+  // preparedFoldersBlock; @zibby/core's invokeAgent appends the same).
+  const preparedFolders = preparedFoldersBlock();
+  if (preparedFolders) enrichedPrompt += `\n\n${preparedFolders}`;
 
   // THE REPOSITORY'S OWN RULES (CLAUDE.md, AGENTS.md, …) — every model node,
   // every vendor, the same block; '' when the node works in no repository.

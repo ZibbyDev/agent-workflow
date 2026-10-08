@@ -495,6 +495,14 @@ export interface PreparedWorkspace {
   originalPath: string;
   /** The folder the work is about. */
   primary: boolean;
+  /**
+   * What this run was given for the folder when it started — the runner's own
+   * word in the manifest (`access`), read the way every reader of the manifest
+   * reads it: 'read-only' when it says so, 'editable' otherwise (a runner from
+   * before the field existed only ever prepared editable folders). A fact for
+   * whoever shows the run its folders; nothing here acts on it.
+   */
+  access: 'read-only' | 'editable';
   /** Rule files the runner found in the folders ABOVE it on disk, mounted read-only at these paths. */
   ancestorRuleFiles: string[];
 }
@@ -502,7 +510,7 @@ export interface PreparedWorkspace {
 /**
  * The project folders the runner prepared for this run, from its manifest
  * (LOCAL_PROJECT_CONTEXT: `{ workspaces: [{ directory | path, originalPath?,
- * isPrimary?, ancestorRuleFiles? }] }` or a single `{ path }`). Absolute paths
+ * isPrimary?, access?, ancestorRuleFiles? }] }` or a single `{ path }`). Absolute paths
  * only; an unreadable manifest is no folders. The primary folder is the one
  * marked `isPrimary`, else the first (the runner's order: REPOS puts the
  * primary first).
@@ -520,6 +528,7 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
       directory: typeof w.directory === 'string' ? w.directory : typeof w.path === 'string' ? w.path : '',
       originalPath: abs(w.originalPath) && normalize(w.originalPath) === w.originalPath ? w.originalPath : '',
       marked: w.isPrimary === true,
+      access: w.access === 'read-only' ? 'read-only' : 'editable',
       ancestorRuleFiles: (Array.isArray(w.ancestorRuleFiles) ? w.ancestorRuleFiles : []).filter(abs).slice(0, MAX_ANCESTOR_FILES),
     }))
     .filter((w: any) => abs(w.directory))
@@ -531,6 +540,43 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
 /** The prepared folders' directories (see preparedWorkspaces). */
 export function preparedProjectFolders(env: Record<string, string | undefined> = process.env): string[] {
   return preparedWorkspaces(env).map((w) => w.directory);
+}
+
+export const PREPARED_FOLDERS_HEADING = '## PROJECT FOLDERS AVAILABLE IN THIS RUN';
+
+/**
+ * THE RUN'S PROJECT FOLDERS, AS A STANDING FACT — the block every model node
+ * of a run that was handed project folders reads, whatever agent or vendor it
+ * is: each folder as the person names it, where it is in this run, and the
+ * access this run was given for it. '' when the runner prepared none (or the
+ * manifest names no folder by the person's own path), so every other prompt is
+ * byte-identical. PURE.
+ *
+ * ONE SOURCE: the manifest the runner mounted from (LOCAL_PROJECT_CONTEXT, via
+ * preparedWorkspaces) — written when the run starts, so the block is read
+ * fresh by every run and nothing has to tell a run that a folder changed.
+ * Both invokeAgent paths append it (this engine's and @zibby/core's), like the
+ * repository-rules block and the stop-time sentence.
+ *
+ * It replaces two partial tellings of the same fact: the fleet manager's own
+ * list (paths, no access) and a sentence the executor wrote into the override
+ * block (the read-only folders only, and only for a node that reads files).
+ * A change of access made in the project's settings reached nobody
+ * (run_log/magnum/2026-10-08-settings-folder-change-tells-no-one); here it is
+ * simply what the next run is told.
+ *
+ * FACTS ONLY: what the two words mean, and when they were read. What an agent
+ * does about a folder it cannot change is its own judgement.
+ */
+export function preparedFoldersBlock(env: Record<string, string | undefined> = process.env): string {
+  let folders: PreparedWorkspace[] = [];
+  try { folders = preparedWorkspaces(env).filter((w) => w.originalPath); } catch { return ''; }
+  if (!folders.length) return '';
+  return [PREPARED_FOLDERS_HEADING,
+    'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. Paths outside these folders are unavailable here. '
+    + 'The word after each folder is its access as this run was given it when it started: editable — files there can be changed and saved work can land in it; read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it.',
+    ...folders.map((w) => `- ${w.originalPath} → ${w.directory} (${w.access})`),
+  ].join('\n');
 }
 
 /**
