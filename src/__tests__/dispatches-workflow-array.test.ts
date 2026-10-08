@@ -6,7 +6,7 @@
  * (`deriveComposedOf` / the marketplace sync's `childSlugs`) and installs those
  * members. It was one string per node, which is exactly what a declarative
  * `{ workflow: 'slug' }` node produces. A node that fans out over a DECLARED
- * ROSTER inside its own `execute` (board-runner's `dispatch`: N members, one
+ * ROSTER inside its own `execute` (a `dispatch` node: N members, one
  * `Promise.allSettled` over async `dispatchSubgraph` calls) dispatches several
  * children from ONE node, and under the one-string marker the cascade installed
  * exactly one of them while every other member's dispatch 404'd at run time.

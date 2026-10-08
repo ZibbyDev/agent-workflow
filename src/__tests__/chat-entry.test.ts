@@ -100,7 +100,7 @@ describe('a chat turn', () => {
   });
 
   it('the chat call tells the model its live line exists — for whichever node declares chatEntry, with no code in that node', async () => {
-    // `manager` here is a generic node, not board-runner's PM: the fact comes
+    // `manager` here is a generic node, no particular template's: the fact comes
     // from the ENGINE's chat turn, so every template's chat entry gets it.
     const calls: any[] = [];
     const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return 'ok'; });

@@ -29,9 +29,9 @@ describe('dispatchSubgraph — session on the HTTP trigger', () => {
   it('sends { scope, continue } and nothing else about the session', async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ data: { jobId: 'j1' } }));
     vi.stubGlobal('fetch', fetchMock);
-    await dispatchSubgraph('developer', { input: {}, async: true, session: { scope: ' ticket:vikunja/460 ', continue: true } });
+    await dispatchSubgraph('developer', { input: {}, async: true, session: { scope: ' ticket:tracker/460 ', continue: true } });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.session).toEqual({ scope: 'ticket:vikunja/460', continue: true });
+    expect(body.session).toEqual({ scope: 'ticket:tracker/460', continue: true });
   });
 
   it('continue defaults to false; no session → no field', async () => {

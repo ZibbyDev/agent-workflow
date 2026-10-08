@@ -3,7 +3,7 @@
  *
  * `scripts/build.mjs` builds EVERY src file as its own esbuild bundle
  * (entryPoints = all of src/, `bundle: true`). That is deliberate and
- * load-bearing — `selfhosted/control-plane/Dockerfile` greps every
+ * load-bearing — a downstream image build greps every
  * `@zibby/agent-workflow/dist/graph.js` it can find for a minify-proof
  * marker and hard-fails the image build when none is found, so "just
  * stop emitting the duplicates" is NOT an available fix.

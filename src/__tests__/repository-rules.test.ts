@@ -150,10 +150,9 @@ describe('collectRepositoryRules', () => {
     expect(block).toContain(`- ${join(r, 'deep', 'CLAUDE.md')} — applies to work under ${join(r, 'deep')}/`);
   });
 
-  // A/B — run_log/magnum/2026-10-08-member-context-size. The owner's rule file
-  // on the box is 32 271 bytes; the block sent 32 000 of them, cut the last 271
-  // and listed the file under "read the rest", and members read the whole file
-  // again to get them. Fails before this change (the file is cut 271 bytes
+  // A/B. A rule file of 32 271 bytes: the block used to send 32 000 of them,
+  // cut the last 271 and list the file under "read the rest", so an agent read
+  // the whole file again to get them. Fails before this change (the file is cut 271 bytes
   // short and a "read" line is added for it), passes after.
   it('a rule file that fits the room arrives whole — no cut 271 bytes short of the end, no instruction to read it again', () => {
     const r = repo();
@@ -507,9 +506,8 @@ describe('workspace rules — above the folders, full text vs index', () => {
   });
 });
 
-// A/B — run_log/magnum/2026-10-08-settings-folder-change-tells-no-one (v2).
-// A project folder's access was told to a run in parts or not at all: the
-// manifest reader dropped the field, the fleet manager's own list showed paths
+// A/B. A project folder's access was told to a run in parts or not at all:
+// the manifest reader dropped the field, one node's own list showed paths
 // only, and the executor named the read-only folders to nodes that read files.
 // Now it is one standing block, from the manifest, for every model node of a
 // run that has folders. Every case below fails before this change (no
@@ -547,11 +545,11 @@ describe('the run\'s project folders and their access — a standing fact for ev
     expect(block.split('\n')).toHaveLength(2 + 4);
   });
 
-  it('the files mounted OUTSIDE the folders — the rule files above them and the documents those link to — are named, at their own paths (587, 2026-10-08)', () => {
+  it('the files mounted OUTSIDE the folders — the rule files above them and the documents those link to — are named, at their own paths', () => {
     // The block said "Paths outside these folders are unavailable here." while the
     // runner mounts the workspace's rule files and the documents they link to at
-    // their own paths. A developer told to read ENGINEERING_STANDARDS.md first
-    // looked for it under the folders, did not find it and handed back blocked;
+    // their own paths. An agent told to read ENGINEERING_STANDARDS.md first
+    // looked for it under the folders, did not find it and reported blocked;
     // the file was mounted at /Users/…/ENGINEERING_STANDARDS.md the whole time.
     const withRules = manifest([
       { originalPath: '/Users/example/app/selfhosted', directory: '/workspace/local-project/tree/selfhosted', isPrimary: true, access: 'editable',
@@ -624,11 +622,10 @@ describe('the run\'s project folders and their access — a standing fact for ev
   });
 });
 
-// A/B — run_log/magnum/2026-10-08-member-context-size (v2, step 1). The block
-// listed only the files NOT in the prompt; nothing said, per file, that an
-// included one is all there, so an agent told by its owner's rules to "read
-// the rule files completely" read them again (measured: 4.6–6.0% of a Codex
-// member run's input). The index now lists EVERY file found, once, with its
+// A/B. The block listed only the files NOT in the prompt; nothing said, per
+// file, that an included one is all there, so an agent told by its owner's
+// rules to "read the rule files completely" read them again (measured: 4.6–6.0%
+// of a run's input). The index now lists EVERY file found, once, with its
 // size and where its text is — as facts. Every case fails on the renderer
 // before this change (no such heading, no line for an included file, no sizes).
 describe('one index of every rule file: where its text is, and how big the file is', () => {

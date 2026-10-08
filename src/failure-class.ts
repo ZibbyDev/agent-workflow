@@ -3,7 +3,7 @@
  * having a bad second, or is it a real bug?"
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHY THIS FILE EXISTS (execution 42b920ae, 2026-08-25, the founder's own box)
+ * WHY THIS FILE EXISTS (a real run, 2026-08-25)
  *
  * A `frontend-specialist` member had ALREADY built its feature, driven a real
  * browser at it, and taken the screenshot ("Recently viewed … — newest-first
@@ -79,7 +79,7 @@ export const PROVIDER_ERROR_KIND_CLASS: Readonly<Record<string, FailureClass | '
   rate_limit: 'transient',
   server_error: 'transient',
   // The SDK's catch-all. Carries no information, so it decides nothing — the
-  // TEXT decides. This is the exact value execution 42b920ae failed with.
+  // TEXT decides. This is the exact value that run failed with.
   unknown: 'inconclusive',
 });
 
@@ -138,7 +138,7 @@ const PROVIDER_ERROR_TAG = /provider error \[([a-z_]+)(?:\s+http\s+(\d{3}))?\]/i
 /**
  * The message a strategy throws when the PROVIDER reported a failure.
  *
- * This exists because the alternative shipped, and it read — in the founder's
+ * This exists because the alternative shipped, and it read — in the run's
  * execution record, as the entire explanation of a 16-minute loss —
  *
  *     Node 'develop' failed after 1 attempt(s): unknown

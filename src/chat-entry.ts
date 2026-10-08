@@ -75,8 +75,8 @@ export function normalizeChatTurn(raw: any): ChatTurn | null {
 }
 
 /**
- * How a reply in a chat reads (founder, 2026-09-28: "说人话，coworker 一样简洁
- * to the point"). Without it every directly-chatted agent answered with a
+ * How a reply in a chat reads: like a coworker, short and to the point.
+ * Without it every directly-chatted agent answered with a
  * report — headings and numbered lists — for a one-line question. Exported so
  * the chat-path eval can A/B exactly this text.
  */

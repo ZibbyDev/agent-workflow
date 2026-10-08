@@ -2,7 +2,7 @@
  * The HTTP status poll must SURVIVE a transport failure — the child is still
  * running, so an unreachable API is "ask again", never "give up".
  *
- * THE BUG THIS PINS (board-runner, 2026-08-21, a real tick). The poll loop
+ * THE BUG THIS PINS (2026-08-21, a real run). The poll loop
  * treated an HTTP 5xx as transient and retried it, but a `fetch` that
  * REJECTED — undici's bare `TypeError: fetch failed` — was not caught at all
  * and escaped the whole dispatch. One blip 23 minutes into a 40-minute wait

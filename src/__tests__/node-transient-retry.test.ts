@@ -1,7 +1,7 @@
 /**
  * A TRANSIENT PROVIDER FAILURE MUST NOT DESTROY FINISHED WORK.
  *
- * Execution 42b920ae (the founder's box, 2026-08-25): a member had built its
+ * Seen live (2026-08-25): a member had built its
  * feature, verified it in a real browser and taken the screenshot; the stream
  * then died with `API Error: Stream idle timeout - partial response received`.
  * The node failed, the run ended, the branch was never pushed, and the ticket

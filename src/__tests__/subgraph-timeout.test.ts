@@ -8,7 +8,7 @@
  * declared budget was dropped on the floor: `childGraph.run()` ran with the
  * PARENT's abort signal and no deadline of its own, so a wedged child burned
  * the parent's entire container budget and the per-child failure isolation a
- * fleet gets from `Promise.allSettled` (every board-runner lane) could never
+ * fleet gets from `Promise.allSettled` (one lane per member) could never
  * fire. A declaration the engine parses and does not honour.
  *
  * Four things are asserted here, and each is exactly what silently regressed:
@@ -126,7 +126,7 @@ describe('resolveChildTimeoutMs — the budget maths', () => {
   });
 
   it("clamps a declared budget DOWN to the parent's remaining clock — the smaller wins", () => {
-    // board-runner's frontend lane asks for 40 min inside a 25-min container
+    // A lane asks for 40 min inside a 25-min container
     // that is already 5 min in. It cannot have 40; it has 20.
     const got = resolveChildTimeoutMs(
       40 * 60_000,

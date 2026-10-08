@@ -11,12 +11,9 @@
  * is retried, a `begin` failure falls back to the HTTP path — and NONE of that
  * code can run for the one failure mode that actually costs a run.
  *
- * MEASURED, not hypothetical: board-runner run 4b49371e (2026-08-24) sat 7m33s
+ * MEASURED, not hypothetical: a real run (2026-08-24) sat 7m33s
  * inside the identical unbounded shape until the container watchdog killed it,
- * and a tick that had already done all of its work recorded nothing. The same
- * class has been closed in workflow-templates' lib/kb.js (d7e3184),
- * lib/platform-api.js (7a355cc), _shared/tracker.js (539483e) and
- * @zibby/core's backend-client.js.
+ * and a run that had already done all of its work recorded nothing.
  *
  * WHY THE HELPERS LIVE HERE AND NOT NEXT TO THEIR CALL SITES. The engine has
  * two files that dispatch a child — `sub-graph-executor.ts` (HTTP) and

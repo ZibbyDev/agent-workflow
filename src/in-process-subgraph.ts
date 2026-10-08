@@ -96,8 +96,8 @@ export class SubgraphFallback extends Error {
  * deadline (the child keeps running in its own task); the in-process path
  * ABORTS the child (it is this process). What the PARENT sees — the message,
  * `.code`, `.subgraphJobId`, `.subgraphStatus` — must be identical either
- * way, or a `Promise.allSettled` fleet that classifies its rejections (every
- * board-runner lane does) behaves differently depending on a routing decision
+ * way, or a `Promise.allSettled` fleet that classifies its rejections
+ * behaves differently depending on a routing decision
  * it never made. Two places that must agree ⇒ one constructor.
  */
 export function subgraphTimeoutError(workflowName, jobId, timeoutMs, lastStatus = 'timeout', lastTransportError: string | null = null) {

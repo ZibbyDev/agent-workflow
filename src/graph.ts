@@ -685,7 +685,7 @@ export class WorkflowGraph {
           ...(Number.isFinite(collaboration.reserveMs) ? { reserveMs: collaboration.reserveMs } : {}),
         };
       }
-      // Event-driven consumers such as MAGNUM use the same participant roster
+      // Event-driven consumers use the same participant roster
       // without waiting inside the node. This marker is authored metadata for
       // Settings/canvas discovery only; the node's deterministic execute code
       // owns its durable ledger/doorbell behaviour.
@@ -723,7 +723,7 @@ export class WorkflowGraph {
       // A STRING or an ARRAY OF STRINGS. One node = one child was the shape a
       // declarative `{ workflow: 'slug' }` node produces, and it is still what
       // that path emits verbatim. But a node whose `execute` fans out over a
-      // DECLARED ROSTER (board-runner's `dispatch`: one node, N members,
+      // DECLARED ROSTER (a `dispatch` node: one node, N members,
       // `Promise.allSettled` over `dispatchSubgraph(m, { async: true })`)
       // dispatches several children from one place, and the one-string marker
       // could only name one of them — so the deploy cascade installed one
@@ -756,7 +756,7 @@ export class WorkflowGraph {
       // behavior). Readiness consumers apply it to this node's own roster.
       // 0 is the OPTIONAL step: none of its members has to be set up — the
       // step is skipped, with the platform's "not set up" fact, until one is
-      // (a Product Owner's "Ask Council"). The platform, not the node, decides
+      // (an optional "ask the council" step). The platform, not the node, decides
       // what "set up" means (not-set-up.ts).
       const minimumReadyChildren = node?.config?.minimumReadyChildren;
       if (minimumReadyChildren != null) {
@@ -926,10 +926,10 @@ export class WorkflowGraph {
       // `supervisionEntry: true` — THIS NODE IS WHERE MEMBER NOTICES ARRIVE.
       //
       // A fleet's manager has one step that drains its mailbox and hands the
-      // contents to the model (board-runner's briefing node). Declaring it here
+      // contents to the model (its briefing node). Declaring it here
       // is how the PLATFORM learns that this agent can be TOLD something:
-      // at dispatch the backend copies the answer onto each run row
-      // (backend/src/services/run-supervision.js) and the run watchdog then
+      // at dispatch the backend copies the answer onto each run row and the
+      // run watchdog then
       // reads that one field instead of guessing who to notify when a member
       // wedges. Display-only for the canvas; nothing in the engine reads it.
       //

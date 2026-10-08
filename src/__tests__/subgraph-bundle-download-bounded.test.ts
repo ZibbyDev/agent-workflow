@@ -10,7 +10,7 @@
  * PROCESS, so no `AbortSignal` anywhere else in the engine can reach it. A
  * presigned URL whose S3 connection is accepted and then stalls would park a
  * sync sub-graph dispatch until the container watchdog killed the whole run —
- * the 7m33s shape of board-runner run 4b49371e, reached by a different door.
+ * the same 7m33s stall measured on the HTTP path, reached by a different door.
  *
  * WHY THIS FILE EXISTS SEPARATELY. The in-process suite's own header says the
  * curl|tar extract is "deferred to e2e", and that is exactly how a flag pin

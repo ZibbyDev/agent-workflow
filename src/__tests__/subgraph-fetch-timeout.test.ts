@@ -15,7 +15,7 @@
  *      caller's entire contract — is never consulted again. The per-request
  *      budget is what makes that pre-existing deadline real.
  *
- * Measured lineage: board-runner run 4b49371e sat 7m33s inside the identical
+ * Measured lineage: a real run sat 7m33s inside the identical
  * unbounded shape until the container watchdog killed it.
  *
  * ⚠️ TWO-PLACES, asserted here in both halves: `SUBGRAPH_POLL_TIMEOUT_MS` and

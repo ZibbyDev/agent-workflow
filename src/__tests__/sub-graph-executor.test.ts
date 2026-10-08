@@ -437,7 +437,7 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
   });
 
   it('INPUT_INVALID → SUBGRAPH_INVALID_INPUT carrying the platform\'s sentence (child, fields, sender), never retryable', async () => {
-    const said = 'product-owner was not started: its input does not meet what it declares. The input fits none of this agent\'s jobs: … Sent by the run p-1 (magnum) that dispatched it.';
+    const said = 'product-owner was not started: its input does not meet what it declares. The input fits none of this agent\'s jobs: … Sent by the run p-1 (manager) that dispatched it.';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       mockResponse({ ok: false, status: 400, json: { error: said, code: 'INPUT_INVALID', retryable: false, missing: ['prdUrl', 'prdText', 'prdTicketKey', 'ticketKey'], validationErrors: [{ kind: 'union', path: '' }] } }),
     ));

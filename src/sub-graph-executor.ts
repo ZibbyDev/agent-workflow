@@ -356,7 +356,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // conversationId / signal / parentAgent and nothing else). A wedged child
   // therefore consumed the PARENT's whole container budget instead of its
   // own, and a fleet's per-child failure isolation (Promise.allSettled around
-  // N dispatches — every board-runner lane) could never fire. One resolution,
+  // N dispatches — one lane per member) could never fire. One resolution,
   // one variable, both consumers: the paths cannot drift again.
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
 
@@ -606,9 +606,8 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // `TypeError: fetch failed` — DNS blip, connection reset, the control plane
   // restarting) escaped the loop and rejected the whole dispatch, while the
   // 5xx branch two lines below carefully retried the SAME condition reported
-  // a different way. One board-runner tick lost three 40-minute
-  // frontend-specialist children to a single blip 23 minutes in
-  // (2026-08-21): all three parents gave up in the same second, the three
+  // a different way. One manager run lost three 40-minute children to a
+  // single blip 23 minutes in (2026-08-21): all three parents gave up in the same second, the three
   // children kept running as orphans nothing cancels, and the tickets were
   // written back as failed for a retry that would duplicate the work.
   // So: a transport failure is retried exactly like a 5xx, until `deadline`

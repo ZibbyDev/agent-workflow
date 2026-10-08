@@ -2,9 +2,8 @@
  * THE RUN'S DEADLINE — when this run is stopped, as a clock time, and the few
  * facts derived from it that reach the agent.
  *
- * WHY THIS EXISTS (live, 2026-09-27). Developer run 4ae6653c (ticket 460) was
- * stopped at its 60-minute limit in the middle of an investigation, and QA run
- * 3128977d (ticket 445) at the 25-minute default. Neither agent knew time was
+ * WHY THIS EXISTS. A run was stopped at its 60-minute limit in the middle of
+ * an investigation, and another at the 25-minute default. Neither agent knew time was
  * running out: nothing it could read said when the run ends. This module turns
  * the limit the platform already enforces into that fact, once, for every
  * consumer: the sentence every model node reads at the start of its prompt

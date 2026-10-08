@@ -38,7 +38,7 @@ export const EVENTS_FILE = 'events.json';
  *
  * Kept here (not in @zibby/skills) so the strategy can gate without coupling to
  * any specific skill package. MUST stay in sync with the backend's
- * NO_INTEGRATION_TOGGLEABLE_IDS (backend/src/services/skill-integrations.js) —
+ * NO_INTEGRATION_TOGGLEABLE_IDS —
  * the backend accepts these as valid allowlist ids + surfaces them in the
  * /workflows/{uuid}/integrations/status feed.
  */

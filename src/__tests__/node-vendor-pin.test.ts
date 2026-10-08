@@ -1,7 +1,7 @@
 /**
  * A node's vendor pin reaches the strategy on BOTH model paths — a prompt node
  * (node.ts) and a custom-execute node calling `invokeAgent` (graph.ts). The
- * second used to drop it: MAGNUM's "Project Manager", pinned `claude · opus-5`
+ * second used to drop it: a code node pinned `claude · opus-5`
  * on the canvas, ran on the run default (codex) with a Claude model id.
  */
 import { describe, it, expect, vi } from 'vitest';

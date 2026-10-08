@@ -1,6 +1,6 @@
 /**
- * A NODE RUNS ITS OWN MODEL — never another node's (founder, 2026-09-25:
- * "there is no default model … we don't have default per agent").
+ * A NODE RUNS ITS OWN MODEL — never another node's: there is no default
+ * model, per run or per agent.
  *
  * The engine used to end its model chain at the run's MODEL env, which the
  * control plane filled with the FIRST node pin it found, and pick the vendor
