@@ -98,6 +98,25 @@ describe('collaboration LEGO budget + protocol', () => {
     expect(dispatch.mock.calls[1][1].input.instruction).toMatch(/previous attempt/);
   });
 
+  it('passes a long instruction whole (no silent cut) and refuses one over the person-words limit', async () => {
+    const valid = (_id, options) => ({
+      phase: options.input.phase, role: options.input.role, contextRevision: 0,
+      summary: 'valid', claims: [], assumptions: [], risks: [], objections: [], decisions: [],
+      evidenceGaps: [], recommendations: [], artifactRefs: [],
+    });
+    const dispatch = vi.fn(async (id, options) => valid(id, options));
+    const deps = { remainingWorkflowTimeMs: () => 120_000, listParticipants: vi.fn(async () => [participant('claude', ['draft'])]), dispatchParticipant: dispatch };
+    const long = 'x'.repeat(15_000);
+    await runCollaboration({ objective: 'review', instruction: long, timeoutMs: 60_000, reserveMs: 1 }, deps);
+    expect(dispatch.mock.calls[0][1].input.instruction).toBe(long);
+
+    dispatch.mockClear();
+    const refused = await runCollaboration({ objective: 'review', instruction: 'x'.repeat(16_001), required: true, timeoutMs: 60_000, reserveMs: 1 }, deps);
+    expect(refused).toMatchObject({ status: 'incomplete', reason: 'instruction_too_long' });
+    expect(JSON.stringify(refused)).toMatch(/Nothing was cut/);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('fails closed when both attempts return raw text', async () => {
     const dispatch = vi.fn(async () => 'looks plausible but is not protocol evidence');
     const result = await runCollaboration({ objective: 'review', required: true, timeoutMs: 60_000, reserveMs: 1 }, {

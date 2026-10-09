@@ -1,4 +1,5 @@
 import { dispatchParticipant, listParticipants } from './sub-graph-executor.js';
+import { CHAT_MESSAGE_MAX } from './chat-entry.js';
 
 const DEFAULT_TIMEOUT_MS = 8 * 60_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
@@ -91,6 +92,16 @@ export async function runCollaboration(options: any = {}, deps: any = {}) {
   const remaining = (deps.remainingWorkflowTimeMs || remainingWorkflowTimeMs)();
 
   if (!objective) return gap(required, 'objective_missing', { protocolId });
+  // A person's words have ONE limit (16000, = CHAT_MESSAGE_MAX = backend
+  // person-words.js): over it the council is refused with the reason, never
+  // started on half a sentence (it used to be cut silently to 4000).
+  const instructionLength = String(options.instruction || '').length;
+  if (instructionLength > CHAT_MESSAGE_MAX) {
+    return gap(required, 'instruction_too_long', {
+      protocolId,
+      detail: `The instruction is ${instructionLength} characters; the limit is ${CHAT_MESSAGE_MAX}. Nothing was cut and no participant was asked — shorten it or send it in parts.`,
+    });
+  }
   if (remaining != null && remaining < timeoutMs + reserveMs) {
     return gap(required, 'insufficient_execution_time', {
       protocolId, remainingMs: remaining, requiredMs: timeoutMs + reserveMs,
@@ -154,7 +165,7 @@ export async function runCollaboration(options: any = {}, deps: any = {}) {
           sharedContext: context,
           priorContributions,
           ...((options.instruction || correction) ? {
-            instruction: [options.instruction, correction].filter(Boolean).join('\n').slice(0, 4000),
+            instruction: [options.instruction, correction].filter(Boolean).join('\n'),
           } : {}),
         },
       });
