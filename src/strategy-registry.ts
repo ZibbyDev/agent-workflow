@@ -18,6 +18,7 @@ import { getSkill } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 import { repositoryRulesBlock, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
+import { unansweredLinesBlock } from './unanswered-lines.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -546,6 +547,11 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // no deadline, so a local run's prompt is byte-identical.
   const deadlineSentence = runDeadlineSentence();
   if (deadlineSentence) enrichedPrompt += `\n\n${deadlineSentence}`;
+
+  // A PERSON'S LINE THAT NEVER GOT AN ANSWER — a fact, '' when there is none
+  // (unanswered-lines.ts; core's invokeAgent appends the same block).
+  const unanswered = unansweredLinesBlock();
+  if (unanswered) enrichedPrompt += `\n\n${unanswered}`;
 
   const extraInstructions = nodeOverrideInstructions(stateView._currentNodeConfig, { disallowedTools: finalOptions.disallowedTools });
   if (extraInstructions) {

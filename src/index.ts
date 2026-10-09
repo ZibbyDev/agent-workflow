@@ -107,6 +107,7 @@ export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrateg
 // Repository rules — the rule files a repository's owner keeps in it, delivered
 // to every model node the same way whatever its vendor (repository-rules.ts).
 export { RUN_DEADLINE_ENV, RUN_LIMIT_MS_ENV, RUN_END_NOTICE_LEAD_MS, runDeadline, clockTime, runDeadlineSentence, runEndNotice, singleCommandCapMs } from './run-deadline.js';
+export { PERSON_ANSWER_TOOL, UNANSWERED_TEXT_MAX_CHARS, UNANSWERED_MAX_LINES, recordPersonLine, markPersonLineAnswered, markPersonLineNoted, unansweredPersonLines, clearPersonLines, unansweredLineFact, unansweredLinesBlock, unansweredLineNote } from './unanswered-lines.js';
 export { REPOSITORY_RULE_FILES, WORKSPACE_RULE_FILES, RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, RULE_FILE_INDEX_HEADING, WORKSPACE_RULES_HEADING, collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, nativelyLoaded, workingChain, preparedProjectFolders, preparedWorkspaces, ruleFilesInDirectory, ruleLocationOf, ruleFileDeclaration, sendsInFull, maskCredentials } from './repository-rules.js';
 export type { RuleFile, RuleLocation, RuleRoot, PreparedWorkspace } from './repository-rules.js';
 
