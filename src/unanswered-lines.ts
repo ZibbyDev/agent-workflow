@@ -14,8 +14,8 @@
  * or waits for it.
  *
  * ONE LEDGER, ONE READER. The pump (`@zibby/cli` inbox-pump) RECORDS a person's
- * line when it delivers it and MARKS it answered when the node's own tool
- * activity shows a `report_progress` call after it. `unansweredPersonLines()`
+ * line when it delivers it. The runtime marks it answered only from an
+ * explicit message-id receipt returned by a successful reply. `unansweredPersonLines()`
  * is the ONLY reader; the sentence every model node reads
  * (`unansweredLinesBlock`, appended by both invokeAgent paths next to the
  * run-deadline sentence) and the note a run leaves for its own next round
@@ -34,6 +34,13 @@
 import { clockTime } from './run-deadline.js';
 
 const SLOT = Symbol.for('agent.unansweredPersonLines');
+const RECEIPTS = Symbol.for('agent.personReplyReceipts');
+
+function receipts(): Map<string, number> {
+  const g: any = globalThis;
+  if (!g[RECEIPTS]) g[RECEIPTS] = new Map<string, number>();
+  return g[RECEIPTS];
+}
 
 /** The tool a person hears the run through (@zibby/skills chat-progress). Pinned by a test in workflow-templates. */
 export const PERSON_ANSWER_TOOL = 'report_progress';
@@ -91,6 +98,7 @@ export function recordPersonLine(line: Partial<PersonLine> & { id: string; text:
       deliveredAtMs: Number.isFinite(line.deliveredAtMs) ? Number(line.deliveredAtMs) : Date.now(),
       nodeName: String(line.nodeName || ''),
       activitySeq: Number.isFinite(line.activitySeq) ? Number(line.activitySeq) : 0,
+      ...(receipts().has(id) ? { answeredAtMs: receipts().get(id) } : {}),
     });
     while (l.size > UNANSWERED_MAX_LINES) l.delete(l.keys().next().value as string);
   } catch { /* the ledger is a courtesy */ }
@@ -99,6 +107,10 @@ export function recordPersonLine(line: Partial<PersonLine> & { id: string; text:
 /** The agent answered this line. Never throws. */
 export function markPersonLineAnswered(id: string, atMs: number = Date.now()): void {
   try {
+    if (!id) return;
+    // A very fast reply may arrive before the delivery RPC/ACK completes.
+    // Keep its explicit receipt so recording the input later cannot lose it.
+    receipts().set(id, atMs);
     const row = ledger().get(id);
     if (row && row.answeredAtMs === undefined) row.answeredAtMs = atMs;
   } catch { /* nothing to mark */ }
@@ -123,13 +135,13 @@ export function unansweredPersonLines(): PersonLine[] {
 
 /** Forget everything. For tests. */
 export function clearPersonLines(): void {
-  try { ledger().clear(); } catch { /* nothing to clear */ }
+  try { ledger().clear(); receipts().clear(); } catch { /* nothing to clear */ }
 }
 
 /** One line as a fact. The words are quoted DATA, a person's. */
 export function unansweredLineFact(line: PersonLine): string {
   const who = line.from ? `${line.from} asked` : 'A person asked';
-  return `${who} "${line.text}" at ${clockTime(Date.parse(line.sentAt) || line.deliveredAtMs)}; no answer has been given.`;
+  return `${who} "${line.text}" at ${clockTime(Date.parse(line.sentAt) || line.deliveredAtMs)} [message id: ${line.id}]; no reply acknowledgment is recorded.`;
 }
 
 /**
@@ -140,10 +152,10 @@ export function unansweredLineFact(line: PersonLine): string {
 export function unansweredLinesBlock(): string {
   const lines = unansweredPersonLines();
   if (!lines.length) return '';
-  return `People watching this run sent it these lines, which reached an earlier step of it and have had no answer. They see the lines you send with ${PERSON_ANSWER_TOOL} as you work:\n${lines.map((l) => `- ${unansweredLineFact(l)}`).join('\n')}`;
+  return `People watching this run sent these lines; their reply acknowledgments are not recorded. They see the lines you send with ${PERSON_ANSWER_TOOL} as you work. A reply can name its answeredMessageIds; an unrelated progress update is not an acknowledgment:\n${lines.map((l) => `- ${unansweredLineFact(l)}`).join('\n')}`;
 }
 
 /** The note a run leaves its own next round when it ends with lines unanswered. */
 export function unansweredLineNote(line: PersonLine): string {
-  return `Platform note: ${unansweredLineFact(line)} It reached the previous run of this agent too late to be answered there.`;
+  return `Platform note: ${unansweredLineFact(line)} It reached the previous run of this agent. The conversation may contain a reply without an explicit acknowledgment.`;
 }
