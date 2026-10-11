@@ -17,7 +17,8 @@ describe('unanswered person lines', () => {
     const b = unansweredLinesBlock();
     expect(b).toContain('"how we doing?"');
     expect(b).toContain('10:58 UTC on 2026-10-09');
-    expect(b).toContain('no answer has been given');
+    expect(b).toContain('no reply acknowledgment is recorded');
+    expect(b).toContain('[message id: a1]');
     expect(unansweredLineNote(unansweredPersonLines()[0])).toContain('how we doing?');
   });
   it('an answered line disappears; recording twice keeps one', () => {
@@ -25,6 +26,11 @@ describe('unanswered person lines', () => {
     expect(unansweredPersonLines()).toHaveLength(1);
     markPersonLineAnswered('a1');
     expect(unansweredLinesBlock()).toBe('');
+  });
+  it('keeps a fast explicit reply that arrives before its input is recorded', () => {
+    markPersonLineAnswered('a1');
+    recordPersonLine(L);
+    expect(unansweredPersonLines()).toEqual([]);
   });
   it('is the same ledger across module copies (globalThis slot)', () => {
     recordPersonLine(L);
