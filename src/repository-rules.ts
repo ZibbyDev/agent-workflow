@@ -502,6 +502,7 @@ export interface PreparedWorkspace {
   access: 'read-only' | 'editable';
   /** Rule files the runner found in the folders ABOVE it on disk, mounted read-only at these paths. */
   ancestorRuleFiles: string[];
+  pending?: boolean;
 }
 
 /**
@@ -523,6 +524,7 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
   const out = entries
     .map((w: any) => ({
       directory: typeof w.directory === 'string' ? w.directory : typeof w.path === 'string' ? w.path : '',
+      ...(w.status === 'pending' ? { pending: true } : {}),
       originalPath: abs(w.originalPath) && normalize(w.originalPath) === w.originalPath ? w.originalPath : '',
       marked: w.isPrimary === true,
       access: w.access === 'read-only' ? 'read-only' : 'editable',
@@ -578,10 +580,11 @@ export function preparedFoldersBlock(env: Record<string, string | undefined> = p
   if (!folders.length) return '';
   const outside = [...new Set(preparedWorkspaces(env).flatMap((w) => w.ancestorRuleFiles))];
   return [PREPARED_FOLDERS_HEADING,
-    'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. '
+    (folders.some(w => w.pending) ? 'The left path is on the person\'s computer; the right path is its location in this run. Folders marked not prepared yet have no files there until you request them. ' : 'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. ')
     + (outside.length ? 'Paths outside these folders are unavailable here, except the files listed after the folders. ' : 'Paths outside these folders are unavailable here. ')
     + 'The word after each folder is its access as this run was given it when it started: editable — files there can be changed and saved work can land in it; read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it.',
-    ...folders.map((w) => `- ${w.originalPath} → ${w.directory} (${w.access})`),
+    ...folders.map((w) => `- ${w.originalPath} → ${w.directory} (${w.access}${w.pending ? '; not prepared yet' : ''})`),
+    ...(folders.some(w => w.pending) ? ['For a folder marked not prepared yet, call prepare_workspaces only when you need its files, using its id from list_workspaces. The tool returns ready paths and repository instructions; then use your native file and command tools there. A conversation that needs no files needs no preparation.'] : []),
     ...(outside.length ? [
       'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',
       ...outside.map((f) => `- ${f}`),

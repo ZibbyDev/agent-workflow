@@ -709,3 +709,11 @@ describe('one index of every rule file: where its text is, and how big the file 
   });
 });
 
+
+it('describes pending chat folders as on-demand while preserving ready-folder behavior', () => {
+  const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [{ id: 'one', status: 'pending',
+    directory: '/workspace/local-project/one', originalPath: '/project', access: 'editable' }] }) };
+  const block = preparedFoldersBlock(env);
+  expect(block).toContain('not prepared yet'); expect(block).toContain('prepare_workspaces');
+  expect(block).toContain('conversation that needs no files needs no preparation');
+});
