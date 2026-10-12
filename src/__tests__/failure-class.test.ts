@@ -146,6 +146,7 @@ describe('TRANSIENT — real network/stream shapes only', () => {
     'status: 429',
     '502 Bad Gateway',
     'rate_limit_error',
+    "Node 'QA' failed after 1 attempt(s): Selected model is at capacity. Please try a different model.",
   ])('%s → transient', (s) => {
     expect(classifyFailure(s)).toBe('transient');
   });

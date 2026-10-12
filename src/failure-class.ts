@@ -113,6 +113,8 @@ export const TRANSIENT_MESSAGE_PATTERNS: readonly RegExp[] = Object.freeze([
   // ── upstream capacity ──
   /\boverloaded(?:_error)?\b/i,
   /\brate[_ ]limit(?:_error|ed)?\b/i,
+  // codex's own words when the chosen model has no room (run 16db0ebd, 2026-10-12)
+  /\bselected model is at capacity\b/i,
   // ── HTTP status, only in an unmistakable HTTP context (a bare "503" in
   //    someone's prose must not buy a retry) ──
   /\b(?:HTTP|http_status|status(?:\s*code)?)[:= ]\s*(?:429|5\d\d)\b/i,
