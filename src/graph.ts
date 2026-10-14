@@ -16,6 +16,7 @@
 import { WorkflowState } from './state.js';
 import { Node } from './node.js';
 import { preferredAgentFor } from './node-vendor.js';
+import { nodeCompactAtTokens, COMPACT_AT_TOKENS } from './session-compaction.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
 import { runCollaboration } from './collaboration.js';
 import { withAgentContext } from './exec-context.js';
@@ -796,6 +797,11 @@ export class WorkflowGraph {
       if (typeof node?.config?.agent === 'string' && node.config.agent.trim()) {
         config.agent = node.config.agent.trim();
       }
+      // The node's declared compaction size (session-compaction.ts). Read by
+      // the same function the run uses, so a malformed value fails here — at
+      // template sync — instead of on a run. Undeclared → no key.
+      const compactAtTokens = nodeCompactAtTokens(node?.config, nodeId);
+      if (compactAtTokens !== null) config[COMPACT_AT_TOKENS] = compactAtTokens;
       if (node.outputSchema) {
         if (typeof node.outputSchema._def !== 'undefined') {
           // Robust convert: prefer Zod v4's native converter, fall back to the
@@ -1697,6 +1703,12 @@ export class WorkflowGraph {
       // Is this node's model call the CHAT call? Only on a chat turn, only for
       // the declared node — every other node and every other run is untouched.
       const chatCall = !!(chatTurn && currentNode === chatNodeId);
+      // The node's DECLARED compaction size (session-compaction.ts — the one
+      // reader), handed to every model call this node makes. Below a caller's
+      // explicit option, above skill defaults. Undeclared → no key at all, so
+      // the strategy keeps the vendor's own default.
+      const compactAtTokens = nodeCompactAtTokens(node.config, currentNode);
+      const declaredInvokeOpts = compactAtTokens === null ? {} : { [COMPACT_AT_TOKENS]: compactAtTokens };
       const boundInvokeAgent = async (prompt, ctx, opts: any = {}) => {
         // Always inject the engine's internal signal into the strategy
         // options. Node.execute doesn't pass signal itself, so without
@@ -1707,6 +1719,7 @@ export class WorkflowGraph {
         // free text and it is what the person reads.
         const strategyPromise = rawInvokeAgent(chatCall ? `${prompt}\n${renderChatTurn(chatTurn as any)}` : prompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
+          ...declaredInvokeOpts,  // the node's own declaration (compactAtTokens)
           ...opts,                // caller-explicit overrides
           ...(chatCall ? { schema: undefined } : {}),
           signal: internalAbortController.signal,  // engine always wins
