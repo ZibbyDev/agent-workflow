@@ -164,6 +164,28 @@ export interface RuleFile {
 const isFile = (p: string) => { try { return lstatSync(p).isFile(); } catch { return false; } };
 const isRealDir = (p: string) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
 
+/**
+ * What a path IS on disk, as the filesystem itself says: its device and inode
+ * (never following a symlink); null when the filesystem gives no inode or the
+ * path cannot be read. Two paths with the same identity are one file or one
+ * folder, however they are spelled.
+ *
+ * WHY. A runner may mount one folder at more than one place: the self-host
+ * runner mounts every project folder of a run at its id
+ * (`/workspace/local-project/<id>`) AND at its real arrangement
+ * (`/workspace/local-project/tree/<relative path>`) — the same folder twice.
+ * Compared by spelling, the second mount was "another checkout": its rule
+ * files were collected again, and a primary folder's CLAUDE.md went into
+ * every request twice. Compared by identity it is the folder it is.
+ */
+export type PathIdentity = (path: string) => string | null;
+export const pathIdentity: PathIdentity = (path) => {
+  try {
+    const s = lstatSync(path, { bigint: true });
+    return s.ino ? `${s.dev}:${s.ino}` : null;
+  } catch { return null; }
+};
+
 /** First `max` bytes of a file, as text. Never follows a symlink (caller checked lstat). */
 function readHead(path: string, max: number): string {
   let fd: number | null = null;
@@ -621,17 +643,22 @@ export interface RuleRoot {
  * repository) or a prepared/named folder (`declared: true` — always scanned
  * below, git or not). Files come in order: above the folder (outermost first),
  * its chain, then its subfolders, root by root; the same file reached from two
- * roots is listed once, in full if either root sends it in full. Never throws.
+ * roots — under one path or two (`identity`: one file mounted at two places
+ * is still one file) — is listed once, in full if either root sends it in
+ * full. Never throws.
  */
-export function collectRepositoryRules(roots: RuleRoot[]): RuleFile[] {
+export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity }: { identity?: PathIdentity } = {}): RuleFile[] {
   type Found = Omit<RuleFile, 'full' | 'summary' | 'text' | 'bytes'> & { onDemand: boolean; primary: boolean };
   const found = new Map<string, Found>();
   const byPlace = (f: Found) => sendsInFull({ origin: f.origin, primary: f.primary });
+  const keyOf = (p: string) => { let id: string | null = null; try { id = identity(p); } catch { id = null; } return id ? `id:${id}` : `path:${p}`; };
   const add = (f: Found) => {
-    const had = found.get(f.path);
+    const key = keyOf(f.path);
+    const had = found.get(key);
     // Reached again from where it is sent in full (the primary folder's chain
     // or the folders above it): that standing wins, whoever reached it first.
-    if (!had || (!byPlace(had) && byPlace(f))) found.set(f.path, f);
+    // Otherwise the first path it was reached by is the one the run is told.
+    if (!had || (!byPlace(had) && byPlace(f))) found.set(key, f);
   };
   const ask = ignoreAsker();
   for (const r of roots || []) {
@@ -825,12 +852,15 @@ ${[...inPrompt, ...shown].map((l) => `- ${l}`).join('\n')}${rest ? `\n- …and $
  * '' when there are none. Never throws — a rule file that cannot be read must
  * never fail a run.
  */
-export function repositoryRulesBlock(args: { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown } = {}): string {
+export function repositoryRulesBlock(args: { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown; identity?: PathIdentity } = {}): string {
   return repositoryRulesParts(args).map((p) => p.text).join('\n\n');
 }
 
-/** repositoryRulesBlock as its pieces (renderRepositoryRulesParts); [] when there are none. Never throws. */
-export function repositoryRulesParts({ workspace, strategy, env = process.env, repositoryRoots = [] }: { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown } = {}): PromptPart[] {
+/**
+ * repositoryRulesBlock as its pieces (renderRepositoryRulesParts); [] when there are none. Never throws.
+ * `identity` says what a path is on disk (default: the filesystem's device + inode, `pathIdentity`).
+ */
+export function repositoryRulesParts({ workspace, strategy, env = process.env, repositoryRoots = [], identity = pathIdentity }: { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown; identity?: PathIdentity } = {}): PromptPart[] {
   try {
     const cwd = typeof workspace === 'string' && workspace ? workspace : process.cwd();
     const named = (Array.isArray(repositoryRoots) ? repositoryRoots : [])
@@ -838,8 +868,26 @@ export function repositoryRulesParts({ workspace, strategy, env = process.env, r
     const prepared = preparedWorkspaces(env);
     const asRoot = (w: PreparedWorkspace): RuleRoot => ({ dir: w.directory, declared: true, primary: w.primary, originalPath: w.originalPath, ancestors: w.ancestorRuleFiles });
     // A checkout found inside a prepared folder IS that folder (a worktree has
-    // a `.git` too): it keeps that folder's standing, primary or not.
-    const inPrepared = (d: string) => prepared.some((w) => resolve(d) === resolve(w.directory) || resolve(d).startsWith(resolve(w.directory) + sep));
+    // a `.git` too): it keeps that folder's standing, primary or not. "Inside"
+    // is asked of the folders themselves, not of their spelling: the same
+    // folder mounted at a second path (the runner's id mount beside its
+    // arranged path) is that prepared folder too, not another checkout whose
+    // rules are sent again.
+    const idOf = (d: string) => { try { return identity(d); } catch { return null; } };
+    const preparedIds = new Set(prepared.map((w) => idOf(w.directory)).filter((id): id is string => !!id));
+    const isPreparedFolder = (d: string) => {
+      if (!preparedIds.size) return false;
+      for (let cur = resolve(d), i = 0; i < 64; i++) {
+        const id = idOf(cur);
+        if (id && preparedIds.has(id)) return true;
+        const parent = dirname(cur);
+        if (parent === cur) return false;
+        cur = parent;
+      }
+      return false;
+    };
+    const inPrepared = (d: string) => prepared.some((w) => resolve(d) === resolve(w.directory) || resolve(d).startsWith(resolve(w.directory) + sep))
+      || isPreparedFolder(d);
     const roots: RuleRoot[] = [
       ...prepared.filter((w) => w.primary).map(asRoot),
       { dir: cwd, declared: false },
@@ -851,7 +899,7 @@ export function repositoryRulesParts({ workspace, strategy, env = process.env, r
       ...subfolders(cwd, true).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
         .map((dir) => ({ dir, declared: true })),
     ];
-    const files = collectRepositoryRules(roots);
+    const files = collectRepositoryRules(roots, { identity });
     if (!files.length) return [];
     return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
   } catch {

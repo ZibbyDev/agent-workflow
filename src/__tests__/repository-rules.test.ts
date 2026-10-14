@@ -3,7 +3,7 @@
  * model node the same way, whatever vendor the node runs on.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, linkSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
@@ -11,7 +11,7 @@ import {
   collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, nativelyLoaded,
   workingChain, preparedProjectFolders, maskCredentials, REPOSITORY_RULE_FILES,
   RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, ruleLocationOf,
-  preparedWorkspaces, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, RULE_FILE_INDEX_HEADING,
+  preparedWorkspaces, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, RULE_FILE_INDEX_HEADING, pathIdentity,
 } from '../repository-rules.js';
 
 let base: string;
@@ -716,4 +716,76 @@ it('describes pending chat folders as on-demand while preserving ready-folder be
   const block = preparedFoldersBlock(env);
   expect(block).toContain('not prepared yet'); expect(block).toContain('prepare_workspaces');
   expect(block).toContain('conversation that needs no files needs no preparation');
+});
+
+// A/B. A runner may mount one project folder at two places — the self-host
+// runner mounts each folder at its id AND at its real arrangement under
+// `tree/`. The arranged path is the one the run is told; the id mount was found
+// by the checkout walk as "another checkout", so a primary folder's CLAUDE.md
+// went into every request twice (and a non-primary folder's rules were sent in
+// full under the id path while its own line said "not in this prompt").
+// Every case below fails before identity was asked (two copies / the second
+// path in the block) and passes after.
+describe('one folder reached by two paths is one folder: its rules are sent once', () => {
+  const RULE = 'FOLDER_OWN_RULE_TEXT';
+  function twoMounts(primary: 'service' | 'templates') {
+    const run = join(base, 'run');
+    const lp = join(run, 'local-project');
+    const arranged = { service: join(lp, 'tree', 'service'), templates: join(lp, 'tree', 'packages', 'templates') };
+    const byId = { service: join(lp, 'id-service'), templates: join(lp, 'id-templates') };
+    for (const d of [...Object.values(arranged), ...Object.values(byId)]) mkdirSync(join(d, '.git'), { recursive: true });
+    const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ executionId: 'e', workspaces: (['service', 'templates'] as const).map((k) => ({
+      id: `id-${k}`, directory: arranged[k], originalPath: `/Users/example/app/${k}`, isPrimary: k === primary })) }) };
+    return { run, arranged, byId, env };
+  }
+  const sections = (block: string, path: string) => block.split(`## Repository rules (from ${path}`).length - 1;
+
+  it('a rule file that is one file on disk (one inode) under two folder paths is sent once, under the path the run is told', () => {
+    const { run, arranged, byId, env } = twoMounts('templates');
+    put(join(arranged.templates, 'CLAUDE.md'), RULE);
+    linkSync(join(arranged.templates, 'CLAUDE.md'), join(byId.templates, 'CLAUDE.md'));
+    // A genuinely different checkout keeps its own rules: nothing readable before is lost.
+    const other = join(run, 'checkouts', 'other');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    put(join(other, 'CLAUDE.md'), 'OTHER_CHECKOUT_RULE');
+    const block = repositoryRulesBlock({ workspace: run, env });
+    expect(block.split(RULE).length - 1).toBe(1);
+    expect(sections(block, join(arranged.templates, 'CLAUDE.md'))).toBe(1);
+    expect(block).not.toContain(byId.templates);
+    expect(block).toContain(`- ${join(arranged.templates, 'CLAUDE.md')} — whole text in this prompt (${RULE.length} bytes)`);
+    expect(block).toContain('OTHER_CHECKOUT_RULE');
+  });
+
+  it('the id mount of the PRIMARY folder is that folder: its CLAUDE.md is in the prompt once', () => {
+    const { run, arranged, byId, env } = twoMounts('templates');
+    for (const d of [arranged.templates, byId.templates]) { put(join(d, 'CLAUDE.md'), RULE); put(join(d, 'api', 'AGENTS.md'), '# API\nSUB_RULE'); }
+    // The two paths are one folder on disk (as two bind mounts of one host folder are).
+    const identity = (p: string) => (p.startsWith(byId.templates) ? arranged.templates + p.slice(byId.templates.length) : p);
+    const block = repositoryRulesBlock({ workspace: run, env, identity });
+    expect(block.split(RULE).length - 1).toBe(1);
+    expect(sections(block, join(arranged.templates, 'CLAUDE.md'))).toBe(1);
+    expect(block).not.toContain(byId.templates);
+    // Its subfolder rule is one index line, not two.
+    expect(block.split(`- ${join(arranged.templates, 'api', 'AGENTS.md')} — `).length - 1).toBe(1);
+  });
+
+  it('the id mount of a NON-primary folder keeps that folder\'s standing: its rules are on the index once, as before under its arranged path', () => {
+    const { run, arranged, byId, env } = twoMounts('service');
+    for (const d of [arranged.templates, byId.templates]) put(join(d, 'CLAUDE.md'), RULE);
+    const identity = (p: string) => (p.startsWith(byId.templates) ? arranged.templates + p.slice(byId.templates.length) : p);
+    const block = repositoryRulesBlock({ workspace: run, env, identity });
+    expect(block).not.toContain(RULE);
+    expect(block).not.toContain(byId.templates);
+    expect(block).toContain(`- ${join(arranged.templates, 'CLAUDE.md')} — applies to work under ${arranged.templates}/ — not in this prompt (${RULE.length} bytes)`);
+  });
+
+  it('identity is the filesystem\'s own (device + inode, never through a symlink); unknown is not "the same"', () => {
+    const r = repo();
+    put(join(r, 'CLAUDE.md'), 'x');
+    linkSync(join(r, 'CLAUDE.md'), join(r, 'AGENTS.md'));
+    symlinkSync(join(r, 'CLAUDE.md'), join(r, 'GEMINI.md'));
+    expect(pathIdentity(join(r, 'CLAUDE.md'))).toBe(pathIdentity(join(r, 'AGENTS.md')));
+    expect(pathIdentity(join(r, 'GEMINI.md'))).not.toBe(pathIdentity(join(r, 'CLAUDE.md')));
+    expect(pathIdentity(join(r, 'missing'))).toBeNull();
+  });
 });
