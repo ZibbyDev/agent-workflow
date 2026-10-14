@@ -16,7 +16,7 @@ import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
-import { repositoryRulesBlock, preparedFoldersBlock } from './repository-rules.js';
+import { repositoryRulesParts, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
 import { unansweredLinesBlock } from './unanswered-lines.js';
 
@@ -429,7 +429,27 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   };
   refuseUnloadablePlugins(strategy, finalOptions.plugins, options.nodeName);
 
-  let enrichedPrompt = prompt;
+  // THE PROMPT AND THE PARTS IT IS MADE OF, built together: every addition
+  // below is one named part, and the prompt is their texts in order, so the
+  // two cannot disagree. The strategy receives the parts as `promptParts`
+  // (a continued conversation is handed only the parts it does not already
+  // hold — @zibby/core native-session.js). The node's own parts come first:
+  // its `promptParts` when they are exactly its prompt, else the prompt whole.
+  let enrichedPrompt: any = typeof prompt === 'string' ? '' : prompt;
+  const parts: { key: string; text: string }[] = [];
+  const add = (key: string, text: string) => {
+    let k = key;
+    for (let n = 2; parts.some((p) => p.key === k); n++) k = `${key} #${n}`;
+    parts.push({ key: k, text });
+    enrichedPrompt += text;
+  };
+  if (typeof prompt === 'string') {
+    const nodeParts = Array.isArray(options.promptParts)
+      && options.promptParts.every((p: any) => p && typeof p.key === 'string' && p.key && typeof p.text === 'string')
+      && options.promptParts.map((p: any) => p.text).join('') === prompt
+      ? options.promptParts : [{ key: 'node', text: prompt }];
+    for (const p of nodeParts) add(p.key, p.text);
+  }
 
   const skills = finalOptions.skills || [];
   if (skills.length > 0 && !options.skipPromptFragments) {
@@ -484,12 +504,11 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
         if (!isAvailable(skill)) return null;
         if (!isMounted(skill)) return null;
         const frag = skill?.promptFragment;
-        return typeof frag === 'function' ? frag() : frag;
+        const text = typeof frag === 'function' ? frag() : frag;
+        return text ? { id, text } : null;
       })
       .filter(Boolean);
-    if (fragments.length > 0) {
-      enrichedPrompt += `\n\n${fragments.join('\n\n')}`;
-    }
+    for (const f of fragments) add(`skill ${f.id}`, `\n\n${f.text}`);
   }
 
   // Store catalog (Stores v2) — if this node declares `stores`, the BACKEND
@@ -525,7 +544,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
       }
       return line;
     });
-    enrichedPrompt += `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`;
+    add('stores', `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`);
   }
 
   // THE RUN'S PROJECT FOLDERS AND THEIR ACCESS — a standing fact for every
@@ -533,36 +552,37 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // runner mounted from; '' when it prepared none (repository-rules.ts
   // preparedFoldersBlock; @zibby/core's invokeAgent appends the same).
   const preparedFolders = preparedFoldersBlock();
-  if (preparedFolders) enrichedPrompt += `\n\n${preparedFolders}`;
+  if (preparedFolders) add('project folders', `\n\n${preparedFolders}`);
 
   // THE REPOSITORY'S OWN RULES (CLAUDE.md, AGENTS.md, …) — every model node,
   // every vendor, the same block; '' when the node works in no repository.
   // Placed before the operator's override block, which stays last and wins.
   // One function for both invokeAgent paths (repository-rules.ts).
-  const repositoryRules = repositoryRulesBlock({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots });
-  if (repositoryRules) enrichedPrompt += `\n\n${repositoryRules}`;
+  for (const p of repositoryRulesParts({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots })) {
+    add(p.key, `\n\n${p.text}`);
+  }
 
   // WHEN THIS RUN IS STOPPED — one sentence, every model node, every vendor
   // (run-deadline.ts; core's invokeAgent appends the same). '' when the run has
   // no deadline, so a local run's prompt is byte-identical.
   const deadlineSentence = runDeadlineSentence();
-  if (deadlineSentence) enrichedPrompt += `\n\n${deadlineSentence}`;
+  if (deadlineSentence) add('run deadline', `\n\n${deadlineSentence}`);
 
   // A PERSON'S LINE THAT NEVER GOT AN ANSWER — a fact, '' when there is none
   // (unanswered-lines.ts; core's invokeAgent appends the same block).
   const unanswered = unansweredLinesBlock();
-  if (unanswered) enrichedPrompt += `\n\n${unanswered}`;
+  if (unanswered) add('unanswered lines', `\n\n${unanswered}`);
 
   const extraInstructions = nodeOverrideInstructions(stateView._currentNodeConfig, { disallowedTools: finalOptions.disallowedTools });
   if (extraInstructions) {
-    enrichedPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    add('operator override', `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIORITY OVERRIDE — THE FOLLOWING INSTRUCTIONS TAKE PRECEDENCE OVER ALL PREVIOUS CONTENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ${extraInstructions}
-`;
+`);
   }
 
   logger.debug(`[workflow] prompt length: ${enrichedPrompt.length} chars`);
-  return strategy.invoke(enrichedPrompt, finalOptions);
+  return strategy.invoke(enrichedPrompt, { ...finalOptions, promptParts: parts });
 }
