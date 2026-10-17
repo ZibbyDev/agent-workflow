@@ -33,6 +33,9 @@ export { WorkflowGraph, WorkflowGraph as Graph } from './graph.js';
 // to multiple child workflows in a loop (the declarative
 // `addNode({ workflow: 'name' })` form only dispatches once per node).
 export { dispatchSubgraph, dispatchParticipant, listParticipants } from './sub-graph-executor.js';
+// Child runs reach the platform over the HOST's transport (child-run-transport.ts).
+export { registerChildRunTransport, getChildRunTransport } from './child-run-transport.js';
+export type { ChildRunTransport, ChildRunConnection, ChildRunCall, ChildRunCallName, ChildRunConnectionKind, ChildRunResponse } from './child-run-transport.js';
 export { isNotSetUp, SUBGRAPH_NOT_SET_UP } from './not-set-up.js';
 export { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 export { runCollaboration, remainingWorkflowTimeMs } from './collaboration.js';
@@ -88,11 +91,14 @@ export { compileGraph, validateGraphConfig, extractSteps, CompilationError } fro
 export { registerNode, getNodeImpl, hasNode, listNodeTypes, getNodeTemplate } from './node-registry.js';
 
 // Chat entry — a person talking to the agent itself (node `chatEntry: true`)
-export { CHAT_ENTRY_FLAG, declaresChatEntry, normalizeChatTurn, renderChatTurn, chatReplyText, chatEntryProblems, CHAT_REPLY_TASTE, CHAT_MESSAGE_MAX, CHAT_CONVERSATION_MAX_ITEMS, CHAT_CONVERSATION_MAX_CHARS } from './chat-entry.js';
-export type { ChatTurn, ChatLine } from './chat-entry.js';
+export { CHAT_ENTRY_FLAG, declaresChatEntry, normalizeChatTurn, renderChatTurn, chatReplyText, chatEntryProblems, CHAT_REPLY_TASTE, CHAT_MESSAGE_MAX, CHAT_CONVERSATION_MAX_ITEMS, CHAT_CONVERSATION_MAX_CHARS, CHAT_ATTACHMENTS_MAX, CHAT_ATTACHMENT_REF_MAX } from './chat-entry.js';
+export type { ChatTurn, ChatLine, ChatAttachment } from './chat-entry.js';
+// Chat attachments — the host registers the reader that opens attached files.
+export { registerChatAttachmentResolver, getChatAttachmentResolver, resolveChatAttachments, chatAttachmentsUnreadable } from './chat-attachments.js';
+export type { ChatAttachmentResolver, ResolvedChatAttachments, ChatAttachmentImage, ChatAttachmentFile } from './chat-attachments.js';
 
 // Skill registry
-export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills, skillEnabledForAgent } from './skill-registry.js';
+export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills, skillEnabledForAgent, skillFragmentText, skillIntro, skillPromptText, searchedSkillIds, skillToolGuide, withToolGuide } from './skill-registry.js';
 
 // Tool resolution
 export { resolveNodeTools, getResolvedToolDefinitions, NODE_DEFAULT_TOOLS } from './tool-resolver.js';
@@ -108,8 +114,8 @@ export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrateg
 // to every model node the same way whatever its vendor (repository-rules.ts).
 export { RUN_DEADLINE_ENV, RUN_LIMIT_MS_ENV, RUN_END_NOTICE_LEAD_MS, runDeadline, clockTime, runDeadlineSentence, runEndNotice, singleCommandCapMs } from './run-deadline.js';
 export { COMPACT_AT_TOKENS, nodeCompactAtTokens } from './session-compaction.js';
-export { PERSON_ANSWER_TOOL, UNANSWERED_TEXT_MAX_CHARS, UNANSWERED_MAX_LINES, recordPersonLine, markPersonLineAnswered, markPersonLineNoted, unansweredPersonLines, clearPersonLines, unansweredLineFact, unansweredLinesBlock, unansweredLineNote } from './unanswered-lines.js';
-export { REPOSITORY_RULE_FILES, WORKSPACE_RULE_FILES, RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, RULE_FILE_INDEX_HEADING, WORKSPACE_RULES_HEADING, collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, nativelyLoaded, workingChain, preparedProjectFolders, preparedWorkspaces, ruleFilesInDirectory, ruleLocationOf, ruleFileDeclaration, sendsInFull, maskCredentials } from './repository-rules.js';
+export { registerPersonAnswerTool, personAnswerTool, UNANSWERED_TEXT_MAX_CHARS, UNANSWERED_MAX_LINES, recordPersonLine, markPersonLineAnswered, markPersonLineNoted, unansweredPersonLines, clearPersonLines, unansweredLineFact, unansweredLinesBlock, unansweredLineNote } from './unanswered-lines.js';
+export { REPOSITORY_RULE_FILES, WORKSPACE_RULE_FILES, RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, RULE_FILE_INDEX_HEADING, WORKSPACE_RULES_HEADING, collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, nativelyLoaded, workingChain, preparedProjectFolders, preparedWorkspaces, ruleFilesInDirectory, ruleLocationOf, ruleFileDeclaration, sendsInFull, maskCredentials, registerCheckoutDirectories, checkoutDirectories } from './repository-rules.js';
 export type { RuleFile, RuleLocation, RuleRoot, PreparedWorkspace } from './repository-rules.js';
 
 // Code generation (compile graph config to runnable JS)
@@ -137,6 +143,6 @@ export {
 export { timeline, Timeline, WORKFLOW_GRAPH_LOG_MARKER_PREFIX } from './timeline.js';
 
 // Canonical COMPOSE knowledge — the single source every composing surface
-// (Copilot skill, agent-builder template, `zibby init` CLAUDE.md §10) imports
-// instead of hand-copying. See src/compose-knowledge.js editing policy.
+// (a chat assistant's skill, an agent-builder template, a project's generated
+// agent instructions) imports instead of hand-copying. See src/compose-knowledge.js editing policy.
 export { COMPOSE_KNOWLEDGE } from './compose-knowledge.js';

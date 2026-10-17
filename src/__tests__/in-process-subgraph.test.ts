@@ -26,15 +26,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SubgraphFallback, runInProcessSubgraph } from '../in-process-subgraph.js';
 import * as registry from '../subgraph-registry.js';
 import { runInContext } from '../exec-context.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
+import { registerChildRunTransport } from '../child-run-transport.js';
 
-const ENV_KEYS = ['PROGRESS_API_URL', 'SUBGRAPH_INTERNAL_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_SUBGRAPH_MAX_DEPTH'];
+const ENV_KEYS = ['EXECUTION_ID', 'ZIBBY_SUBGRAPH_MAX_DEPTH'];
 const ORIG = {};
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   registry._reset();
 });
@@ -45,6 +45,7 @@ afterEach(() => {
     else process.env[k] = ORIG[k];
   }
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
 function mockFetch(handler) {
@@ -60,34 +61,33 @@ function jsonResp(json, { ok = true, status = 200 } = {}) {
   };
 }
 
-describe('runInProcessSubgraph — env preconditions', () => {
-  it('throws SubgraphFallback(env) when both PROGRESS_API_URL and SUBGRAPH_INTERNAL_URL are unset', async () => {
-    delete process.env.PROGRESS_API_URL;
-    delete process.env.SUBGRAPH_INTERNAL_URL;
+describe('runInProcessSubgraph — the host transport', () => {
+  it('no transport registered → SubgraphFallback(env), so the dispatch moves on to the remote path', async () => {
+    removeTestChildRunTransport();
     await expect(runInProcessSubgraph('child')).rejects.toMatchObject({
       fallback: true,
       reason: 'env',
+      message: expect.stringMatching(/provides no way to start child runs/),
     });
   });
 
-  it('throws SubgraphFallback(env) when PROJECT_API_TOKEN is unset', async () => {
-    delete process.env.PROJECT_API_TOKEN;
+  it('a host that cannot open an in-process connection → SubgraphFallback(env) carrying its words', async () => {
+    registerChildRunTransport({ open(kind) { if (kind === 'in-process') throw new Error('in-process address missing'); return {} as any; } } as any);
     await expect(runInProcessSubgraph('child')).rejects.toMatchObject({
       fallback: true,
       reason: 'env',
+      message: 'in-process sub-graph fallback: env (in-process address missing)',
     });
   });
 
-  it('prefers SUBGRAPH_INTERNAL_URL over PROGRESS_API_URL when both set', async () => {
-    process.env.SUBGRAPH_INTERNAL_URL = 'https://subgraph.example.com/prod/';
-    process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
+  it('begin is sent over the in-process connection', async () => {
+    installTestChildRunTransport({ inProcessBase: 'https://subgraph.example.com/prod' });
     let capturedUrl = null;
     mockFetch(async (url) => {
       capturedUrl = url;
       return jsonResp({ error: 'stop here' }, { ok: false, status: 500 });
     });
     await expect(runInProcessSubgraph('child')).rejects.toMatchObject({ fallback: true });
-    // Trailing slash on SUBGRAPH_INTERNAL_URL should be stripped before joining.
     expect(capturedUrl).toBe('https://subgraph.example.com/prod/internal/subgraph/begin');
   });
 });

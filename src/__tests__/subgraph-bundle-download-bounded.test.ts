@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
 
 const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
 
@@ -53,8 +54,7 @@ const { SUBGRAPH_BUNDLE_TIMEOUT_MS, SUBGRAPH_CONNECT_TIMEOUT_MS } = await import
 /** Must match `selfRuntimeTag()` or the dispatch stops one step earlier. */
 const selfTag = () => `node${(process.versions?.node || '').split('.')[0] || 'unknown'}-${process.platform}-${process.arch}`;
 
-const ENV_KEYS = [
-  'PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID',
+const ENV_KEYS = ['EXECUTION_ID',
   'ZIBBY_SUBGRAPH_CACHE_DIR', 'SUBGRAPH_BUNDLE_TIMEOUT_MS',
 ];
 const ORIG: Record<string, any> = {};
@@ -62,9 +62,7 @@ let cacheRoot: string;
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   cacheRoot = mkdtempSync(join(tmpdir(), 'subgraph-bundle-'));
   process.env.ZIBBY_SUBGRAPH_CACHE_DIR = cacheRoot;
@@ -92,6 +90,7 @@ afterEach(() => {
   }
   rmSync(cacheRoot, { recursive: true, force: true });
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
 const curlArgs = () => spawnCalls.find((c) => c.cmd === 'curl')?.args ?? [];

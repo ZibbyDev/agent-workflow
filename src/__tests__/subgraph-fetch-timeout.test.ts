@@ -39,18 +39,16 @@ import {
   TIMEOUT_CEILING_MS,
   timeoutMsFrom,
 } from '../fetch-deadline.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
 
-const ENV_KEYS = [
-  'PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID',
+const ENV_KEYS = ['EXECUTION_ID',
   'ZIBBY_INPROCESS_SUBGRAPH', 'SUBGRAPH_TRIGGER_TIMEOUT_MS', 'SUBGRAPH_POLL_TIMEOUT_MS',
 ];
 const ORIG: Record<string, any> = {};
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   // Force the HTTP path — this file is about its two fetches.
   process.env.ZIBBY_INPROCESS_SUBGRAPH = '0';
@@ -66,6 +64,7 @@ afterEach(() => {
     else process.env[k] = ORIG[k];
   }
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
   vi.restoreAllMocks();
 });
 
@@ -394,14 +393,12 @@ describe('the in-process dispatch doors are bounded too', () => {
    * reach. Every failure here is deliberately a `SubgraphFallback`, i.e. "use
    * HTTP", which is exactly what a control plane too slow to answer means.
    */
-  const IP_ENV = ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID'];
+  const IP_ENV = ['EXECUTION_ID'];
   const IP_ORIG: Record<string, any> = {};
 
   beforeEach(() => {
     for (const k of IP_ENV) IP_ORIG[k] = process.env[k];
-    process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-    process.env.PROJECT_ID = 'proj-1';
-    process.env.PROJECT_API_TOKEN = 'tok-abc';
+    installTestChildRunTransport();
     process.env.EXECUTION_ID = 'parent-1';
     process.env.SUBGRAPH_TRIGGER_TIMEOUT_MS = '1000';
     registry._reset();
@@ -412,6 +409,7 @@ describe('the in-process dispatch doors are bounded too', () => {
       if (IP_ORIG[k] === undefined) delete process.env[k];
       else process.env[k] = IP_ORIG[k];
     }
+   removeTestChildRunTransport();
   });
 
   it('a `begin` that never answers falls back to HTTP inside the budget', async () => {

@@ -6,7 +6,7 @@
  * watching. The inbox pump wrote it to the model's session seven seconds before
  * the node ended and marked it handled; the node's last act was its result, the
  * next nodes started as new processes and the mailbox row was history, so
- * nobody ever answered (run_log/product-owner/2026-10-09-dock-question-unanswered-mid-run).
+ * nobody ever answered.
  * Ack semantics are unchanged — the row stays history in the mailbox. What was
  * missing is a FACT the next step can see: "this person asked X at T and has
  * had no answer". What to do about it (answer now, answer at the end, decide it
@@ -42,8 +42,29 @@ function receipts(): Map<string, number> {
   return g[RECEIPTS];
 }
 
-/** The tool a person hears the run through (@zibby/skills chat-progress). Pinned by a test in workflow-templates. */
-export const PERSON_ANSWER_TOOL = 'report_progress';
+/*
+ * THE TOOL A PERSON HEARS THE RUN THROUGH is the HOST's: its name comes from
+ * whichever skill carries a person-facing progress line on that platform. The
+ * host registers it once; the engine only names it in the block below and the
+ * host's receipt reader matches on it. None registered → the block says
+ * nothing about a tool. On globalThis, like the ledger, so every loaded copy
+ * sees the one name.
+ */
+const ANSWER_TOOL = Symbol.for('agent.personAnswerTool');
+
+/** Register the name of the tool a person hears the run through (`null` clears it). */
+export function registerPersonAnswerTool(name: string | null): void {
+  if (name !== null && (typeof name !== 'string' || !name.trim())) {
+    throw new Error('registerPersonAnswerTool expects a tool name');
+  }
+  (globalThis as any)[ANSWER_TOOL] = name === null ? null : name.trim();
+}
+
+/** The registered person-answer tool's name, or null. */
+export function personAnswerTool(): string | null {
+  const v = (globalThis as any)[ANSWER_TOOL];
+  return typeof v === 'string' && v ? v : null;
+}
 
 /** The person's words are quoted, clipped here as a transport bound. */
 export const UNANSWERED_TEXT_MAX_CHARS = 600;
@@ -152,7 +173,9 @@ export function unansweredLineFact(line: PersonLine): string {
 export function unansweredLinesBlock(): string {
   const lines = unansweredPersonLines();
   if (!lines.length) return '';
-  return `People watching this run sent these lines; their reply acknowledgments are not recorded. They see the lines you send with ${PERSON_ANSWER_TOOL} as you work. A reply can name its answeredMessageIds; an unrelated progress update is not an acknowledgment:\n${lines.map((l) => `- ${unansweredLineFact(l)}`).join('\n')}`;
+  const tool = personAnswerTool();
+  const hears = tool ? ` They see the lines you send with ${tool} as you work.` : '';
+  return `People watching this run sent these lines; their reply acknowledgments are not recorded.${hears} A reply can name its answeredMessageIds; an unrelated progress update is not an acknowledgment:\n${lines.map((l) => `- ${unansweredLineFact(l)}`).join('\n')}`;
 }
 
 /** The note a run leaves its own next round when it ends with lines unanswered. */

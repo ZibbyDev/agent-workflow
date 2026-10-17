@@ -119,8 +119,8 @@ class Timeline {
   _startIntercepting() {
     // Keep the EXACT previous writers to put back (identity, not a bound copy):
     // the leak test pins `process.stdout.write` back to the very function it
-    // was, and a host that installed its own tee (the self-host runtime's
-    // turn-log capture) gets its own function back, not a wrapper of it.
+    // was, and a host that installed its own tee (a long-lived
+    // runtime's turn-log capture) gets its own function back, not a wrapper of it.
     this._prevStdoutWrite = process.stdout.write;
     this._prevStderrWrite = process.stderr.write;
     this._origStdoutWrite = process.stdout.write.bind(process.stdout);

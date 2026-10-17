@@ -31,18 +31,16 @@ import {
 } from '../in-process-subgraph.js';
 import { dispatchSubgraph } from '../sub-graph-executor.js';
 import * as registry from '../subgraph-registry.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
 
 const ENV_KEYS = [
-  'PROGRESS_API_URL', 'SUBGRAPH_INTERNAL_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN',
   'EXECUTION_ID', 'MAX_WORKFLOW_DURATION_MS', 'ZIBBY_INPROCESS_SUBGRAPH',
 ];
 const ORIG = {};
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   delete process.env.MAX_WORKFLOW_DURATION_MS;
   registry._reset();
@@ -54,6 +52,7 @@ afterEach(() => {
     else process.env[k] = ORIG[k];
   }
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
 const matchingTag = () => {

@@ -1,8 +1,8 @@
 /**
  * `graph.run()` honours an agent's `normalizeInput` hook.
  *
- * Why the hook is on graph.run and not Agent.run: EVERY real run — cloud and
- * self-host — goes through the CLI runner, which calls `agent.buildGraph()`
+ * Why the hook is on graph.run and not Agent.run: EVERY real run goes through
+ * the CLI runner, which calls `agent.buildGraph()`
  * and then `graph.run(agent, initialState)` DIRECTLY. `agent.run()` is never
  * invoked there. Input reshaping that lived in an overridden `Agent.run()`
  * therefore did nothing in production while passing every local + unit test —

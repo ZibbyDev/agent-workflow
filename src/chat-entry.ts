@@ -20,7 +20,7 @@
  *
  * ⚠️ THREE PARTIES MUST AGREE, like `supervisionEntry`: the template sets the
  * flag, the serializer allowlist in graph.ts keeps it, and the platform reads it
- * off the deployed row (backend services/chat-entry.js). The template's own
+ * off the deployed row. The template's own
  * graph-shape test asserts the flag survives `serialize()`.
  */
 
@@ -33,9 +33,13 @@ export const CHAT_ENTRY_FLAG = 'chatEntry';
 export const CHAT_MESSAGE_MAX = 16000;
 export const CHAT_CONVERSATION_MAX_ITEMS = 40;
 export const CHAT_CONVERSATION_MAX_CHARS = 24000;
+export const CHAT_ATTACHMENTS_MAX = 4;
+export const CHAT_ATTACHMENT_REF_MAX = 200;
 
 export interface ChatLine { role: 'person' | 'agent'; text: string }
-export interface ChatTurn { message: string; conversation: ChatLine[] }
+/** A file the person attached: `id` is opaque to the engine, the host's reader resolves it. */
+export interface ChatAttachment { id: string; name: string }
+export interface ChatTurn { message: string; conversation: ChatLine[]; attachments?: ChatAttachment[] }
 
 /** Does this node (a live Node instance or its config) declare the chat entry? */
 export function declaresChatEntry(node: any): boolean {
@@ -71,7 +75,21 @@ export function normalizeChatTurn(raw: any): ChatTurn | null {
     chars += size;
     kept.unshift(lines[i]);
   }
-  return { message: message.slice(0, CHAT_MESSAGE_MAX), conversation: kept };
+  const attachments: ChatAttachment[] = [];
+  if (raw.attachments !== undefined && (!Array.isArray(raw.attachments) || raw.attachments.length > CHAT_ATTACHMENTS_MAX)) {
+    throw new Error(`chat.attachments must be a list of at most ${CHAT_ATTACHMENTS_MAX} attached files`);
+  }
+  // The id is OPAQUE to the engine: only the host's attachment reader
+  // (chat-attachments.ts) knows what it names and how to open it.
+  for (const item of raw.attachments || []) {
+    const id = typeof item?.id === 'string' ? item.id.trim() : '';
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    if (!id || id.length > CHAT_ATTACHMENT_REF_MAX || !name || name.length > CHAT_ATTACHMENT_REF_MAX) {
+      throw new Error('chat.attachments contains an invalid attachment reference: each needs an id and a name');
+    }
+    attachments.push({ id, name });
+  }
+  return { message: message.slice(0, CHAT_MESSAGE_MAX), conversation: kept, attachments };
 }
 
 /**

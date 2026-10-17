@@ -6,8 +6,8 @@
  * closing its box leaves the wrapper installed; the next `nodeStart` then saves
  * the WRAPPER as original, so from that point no restore ever gets back to the
  * real writer and every line the process prints for the rest of its life
- * carries one more `│ ` per leaked node. On the self-host Copilot runtime (one
- * long-lived process, thousands of turns) two superseded turns were enough to
+ * carries one more `│ ` per leaked node. In a long-lived runtime (one
+ * process, thousands of turns) two superseded turns were enough to
  * put `│ │ │ ` in front of every stderr line, where the log readers' one-gutter
  * rules no longer recognised them (2026-09-04).
  *

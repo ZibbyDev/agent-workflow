@@ -56,6 +56,81 @@ export function skillEnabledForAgent(skill, id, allowRaw = process.env.WORKFLOW_
 }
 
 /**
+ * A SKILL'S PROMPT TEXT — ONE DECLARATION, EVERY CONSUMER.
+ *
+ * A skill's `promptFragment` is its full page: what the tool group is for and
+ * how its tools fit together. A skill may also declare `intro` — one or two
+ * sentences, written as a fact, saying what the group does and that its tools
+ * are found with the tool search. How often a group is used belongs to the
+ * agent, not the skill (one agent uses a group in most rounds, another almost
+ * never), so the NODE says which of its declared skills it reaches
+ * through the tool search: `searchSkills`, a subset of its `skills`. For those,
+ * the prompt carries the skill's intro instead of its page; every other
+ * declared skill keeps its page in the prompt, as before.
+ *
+ * The page is not lost: a skill that declares an intro has its page travel
+ * with its tools, appended to each tool's description (`withToolGuide`) and
+ * printed once over its group where a toolbox lists tools — the model reads it
+ * when it loads or looks up the group's tools, in the turns that use them.
+ *
+ * Readers: both invokeAgent paths (this package's strategy-registry and
+ * @zibby/core's strategies/index.js) take the prompt text from
+ * `skillPromptText`; whatever serves a skill's tools to a model takes the page
+ * from `skillToolGuide` and applies it with `withToolGuide`.
+ */
+/** The skill's full page (`promptFragment`, a string or a function returning one), or ''. */
+export function skillFragmentText(skill) {
+  const frag = skill?.promptFragment;
+  const text = typeof frag === 'function' ? frag() : frag;
+  return typeof text === 'string' ? text : '';
+}
+
+/** The skill's declared intro ('' when it declares none). */
+export function skillIntro(skill) {
+  return typeof skill?.intro === 'string' ? skill.intro.trim() : '';
+}
+
+/**
+ * What a declared skill puts in a node's prompt: its intro when the node
+ * reaches it through the tool search (`searched`), else its full page. A
+ * searched skill with no intro is refused — the node would otherwise be told
+ * nothing about a group it can only find by searching.
+ */
+export function skillPromptText(skill, { searched = false } = {}) {
+  if (!searched) return skillFragmentText(skill);
+  const intro = skillIntro(skill);
+  if (!intro) throw new Error(`Skill "${skill?.id}" is reached through the tool search (searchSkills) but declares no intro`);
+  return intro;
+}
+
+/**
+ * The node's `searchSkills`, checked against its `skills`: the set of ids it
+ * reaches through the tool search. An id the node does not declare is refused,
+ * never ignored.
+ */
+export function searchedSkillIds(skills, searchSkills) {
+  const declared = new Set((Array.isArray(skills) ? skills : []).map(String));
+  const searched = new Set((Array.isArray(searchSkills) ? searchSkills : []).map(String));
+  const undeclared = [...searched].filter((id) => !declared.has(id));
+  if (undeclared.length) throw new Error(`searchSkills names ${undeclared.join(', ')}, which the node does not declare in skills`);
+  return searched;
+}
+
+/** The page that travels with the skill's tools: its full page when it declares an intro, else ''. */
+export function skillToolGuide(skill) {
+  return skillIntro(skill) ? skillFragmentText(skill) : '';
+}
+
+/** Tools with the group's page appended to each description (unchanged when there is no page). */
+export function withToolGuide(tools, guide) {
+  const page = typeof guide === 'string' ? guide.trim() : '';
+  if (!page || !Array.isArray(tools)) return tools;
+  return tools.map((tool) => (tool && typeof tool === 'object'
+    ? { ...tool, description: `${String(tool.description || tool.name || '').trimEnd()}\n\n${page}` }
+    : tool));
+}
+
+/**
  * Register a skill definition.
  * @param {Object} skill
  * @param {string}   skill.id             - Unique identifier (used in node `skills` arrays)
@@ -67,6 +142,10 @@ export function skillEnabledForAgent(skill, id, allowRaw = process.env.WORKFLOW_
  * @param {Object[]} [skill.tools]        - Tool schemas for compile-time validation
  * @param {string}   [skill.cursorKey]    - Override key for ~/.cursor/mcp.json
  * @param {Function} [skill.promptFragment] - () => string | string injected into agent prompt
+ * @param {string}   [skill.intro]        - one or two sentences that stand in the prompt for the
+ *                                           fragment on a node that reaches the skill through the
+ *                                           tool search (`searchSkills`); the fragment then travels
+ *                                           with its tools (see skillPromptText)
  * @param {boolean}  [skill.inProcessOnly] - true when the skill's tools run ONLY inside the
  *                                           assistant strategy's loop (handleToolCall; no MCP
  *                                           server). Its promptFragment is then injected ONLY
@@ -87,6 +166,15 @@ export function registerSkill(skill, opts: any = {}) {
   }
   const { source, override = false } = opts;
   const id = skill.id;
+  // An intro stands in for a page whose tools are behind the tool search; a
+  // skill that also pins its tools in front of the model would say two
+  // opposite things about where they are.
+  if (skill.intro !== undefined && (typeof skill.intro !== 'string' || !skill.intro.trim())) {
+    throw new Error(`Skill "${id}": intro must be a non-empty string`);
+  }
+  if (skillIntro(skill) && skill.alwaysLoad === true) {
+    throw new Error(`Skill "${id}" declares an intro (its tools are found with the tool search) and alwaysLoad: true (its tools are in front of the model) — declare one`);
+  }
 
   if (_registry.has(id) && !override) {
     const existingSource = _sources.get(id); // undefined == first-party/trusted

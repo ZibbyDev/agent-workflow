@@ -71,12 +71,12 @@ describe('serialize() — the chatEntry declaration', () => {
 describe('a chat turn', () => {
   it('carries the person\'s words verbatim into the declared node only, with no schema, and hands the reply over', async () => {
     const calls: any[] = [];
-    const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return 'Ticket 12 is with the developer; I started QA on 14.'; });
+    const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return 'Ticket 12 is in progress; 14 is waiting for review.'; });
     const onChatReply = vi.fn(async () => {});
     const graph = chatGraph(invokeAgent);
     const res: any = await graph.run({}, {
       chat: {
-        message: '  what is the status of 12? 顺便把 14 交给 QA  ',
+        message: '  what is the status of 12? 顺便看看 14 的进度  ',
         conversation: [{ role: 'person', text: 'hi' }, { role: 'agent', text: 'Hello — what do you need?' }],
       },
     }, { onChatReply });
@@ -85,18 +85,18 @@ describe('a chat turn', () => {
     const { prompt, opts } = calls[0];
     expect(prompt.startsWith('You are the manager. Board: 3 tickets.')).toBe(true);
     expect(prompt).toContain('A PERSON IS TALKING TO YOU DIRECTLY');
-    expect(prompt).toContain('what is the status of 12? 顺便把 14 交给 QA');
+    expect(prompt).toContain('what is the status of 12? 顺便看看 14 的进度');
     expect(prompt).toContain('[the person] hi');
     expect(prompt).toContain('[you] Hello — what do you need?');
     expect(opts.schema).toBeUndefined();
     expect(opts.nodeName).toBe('manager');
 
-    expect(onChatReply).toHaveBeenCalledWith({ node: 'manager', text: 'Ticket 12 is with the developer; I started QA on 14.' });
-    expect(res.chatReplies).toEqual([{ node: 'manager', text: 'Ticket 12 is with the developer; I started QA on 14.' }]);
+    expect(onChatReply).toHaveBeenCalledWith({ node: 'manager', text: 'Ticket 12 is in progress; 14 is waiting for review.' });
+    expect(res.chatReplies).toEqual([{ node: 'manager', text: 'Ticket 12 is in progress; 14 is waiting for review.' }]);
     // The rest of the run happened as in any run, and every node could see the chat.
     expect(res.state.settle.output).toEqual({ settled: true });
     expect(res.state.prepare.output.sawChat).toBe(true);
-    expect(res.state.chat.message).toBe('what is the status of 12? 顺便把 14 交给 QA');
+    expect(res.state.chat.message).toBe('what is the status of 12? 顺便看看 14 的进度');
   });
 
   it('the chat call tells the model its live line exists — for whichever node declares chatEntry, with no code in that node', async () => {

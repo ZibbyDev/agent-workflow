@@ -22,18 +22,16 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSubgraph } from '../sub-graph-executor.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
 
 const ENV_KEYS = [
-  'PROGRESS_API_URL', 'SUBGRAPH_INTERNAL_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN',
   'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH',
 ];
 const ORIG: Record<string, any> = {};
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   // Force the HTTP path — this test is about its poll loop.
   process.env.ZIBBY_INPROCESS_SUBGRAPH = '0';
@@ -45,6 +43,7 @@ afterEach(() => {
     else process.env[k] = ORIG[k];
   }
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
 const okJson = (json: any) => ({ ok: true, status: 200, json: async () => json, text: async () => JSON.stringify(json) });

@@ -8,9 +8,9 @@
  *
  * What happens here, end-to-end:
  *
- *   1. POST /internal/subgraph/begin
- *      → backend mints the child EXEC row, presigns the child's bundle,
- *        returns runtimeTag + tokens. Quota is enforced here.
+ *   1. `begin` over the host's child-run transport (child-run-transport.ts)
+ *      → the platform records the child's execution, presigns the child's
+ *        bundle, returns runtimeTag + tokens. Quota is enforced here.
  *
  *   2. Compare runtimeTag with the parent's. Mismatch → throw a typed
  *      error so the caller drops back to HTTP/trigger. (Native modules
@@ -32,8 +32,8 @@
  *      that hits the parent propagates immediately to the child — no
  *      polling, no heartbeat — because the same controller drives both.
  *
- *   6. POST /internal/subgraph/finalize with the terminal status.
- *      Idempotent on the backend; retries are safe.
+ *   6. `finalize` over the same transport with the terminal status.
+ *      Idempotent on the platform; retries are safe.
  *
  * Anything that fails along the way (network blip, bundle not ready,
  * runtime mismatch, depth exceeded) throws a typed `SubgraphFallback`
@@ -50,6 +50,7 @@ import { logger } from './logger.js';
 import { notSetUpError, refusalSaysNotSetUp } from './not-set-up.js';
 import { runInContext, getExecContext } from './exec-context.js';
 import * as registry from './subgraph-registry.js';
+import { getChildRunTransport, NO_CHILD_RUN_TRANSPORT } from './child-run-transport.js';
 // The engine's HTTP deadlines live in ONE declaration — see fetch-deadline.ts
 // for why they are not re-derived next to each call site.
 import {
@@ -297,36 +298,25 @@ async function withChildEnvScope(childEnv, fn) {
 }
 
 /**
- * Read the env vars the in-process path needs. Throws a `SubgraphFallback`
- * with reason='env' when anything's missing — that's a real configuration
- * miss and the HTTP path can't help either, but the caller may want to
- * surface a single "in-process not configured" log instead of letting the
- * fetch fail with a less-readable network error.
- *
- * URL precedence:
- *   - `SUBGRAPH_INTERNAL_URL` (preferred) → the SubgraphRoutes nested
- *     stack's execute-api base URL. Empty / unset on older Fargate
- *     images that pre-date the nested stack deploy.
- *   - Fallback to the main `PROGRESS_API_URL` base (strip /executions
- *     suffix) for backwards-compat — works during the rollout window
- *     where the runtime image is updated before the backend stack.
- *     Will 404 on /internal/subgraph/* via the main API, which the
- *     caller treats as a fallback signal and routes through HTTP.
+ * Open the host's connection for this in-process dispatch. Anything that
+ * stops it — no transport registered, or the host saying it cannot reach
+ * child runs from here — is a `SubgraphFallback` with reason='env': the
+ * caller logs one "in-process not configured" line and moves on to the
+ * remote path, which then reports the same gap in the host's own words.
  */
-function readDispatchEnv() {
-  const internalUrl = (process.env.SUBGRAPH_INTERNAL_URL || '').replace(/\/$/, '');
-  const progressBase = (process.env.PROGRESS_API_URL || '').replace(/\/executions\/?$/, '');
-  const apiBase = internalUrl || progressBase;
-  const projectId = process.env.PROJECT_ID;
-  const authToken = process.env.PROJECT_API_TOKEN;
-  if (!apiBase || !projectId || !authToken) {
-    throw new SubgraphFallback('env', 'SUBGRAPH_INTERNAL_URL/PROGRESS_API_URL/PROJECT_ID/PROJECT_API_TOKEN missing');
+function openInProcessConnection() {
+  const transport = getChildRunTransport();
+  if (!transport) throw new SubgraphFallback('env', NO_CHILD_RUN_TRANSPORT);
+  try {
+    return transport.open('in-process');
+  } catch (err) {
+    if (err instanceof SubgraphFallback || err?.fallback) throw err;
+    throw new SubgraphFallback('env', err?.message || String(err));
   }
-  return { apiBase, projectId, authToken };
 }
 
 /**
- * Call POST /internal/subgraph/begin.
+ * Send `begin` over the host's connection.
  *
  * Returns the parsed JSON body (`{ childExecutionId, bundlePresignedUrl,
  * sourcesPresignedUrl, runtimeTag, ... }`).
@@ -337,7 +327,7 @@ function readDispatchEnv() {
  * other than those we fall back (the backend may be running an older
  * version that doesn't expose the endpoint yet).
  */
-async function callBegin({ apiBase, authToken, body }: any) {
+async function callBegin({ connection, body }: any) {
   // BOUNDED, and it matters MORE here than on the HTTP path it falls back to:
   // in-process is the DEFAULT for a sync dispatch, so this call runs FIRST. An
   // unbounded hang here never reaches the HTTP trigger at all, and bounding
@@ -347,12 +337,7 @@ async function callBegin({ apiBase, authToken, body }: any) {
   const dl = deadlineFor('SUBGRAPH_TRIGGER_TIMEOUT_MS', SUBGRAPH_TRIGGER_TIMEOUT_MS);
   let resp;
   try {
-    resp = await fetch(`${apiBase}/internal/subgraph/begin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify(body),
-      signal: dl.signal,
-    });
+    resp = await connection.send({ call: 'begin', body, signal: dl.signal });
   } catch (netErr) {
     // A timeout lands in the SAME fail-soft outcome a transport error always
     // did — `SubgraphFallback` means "in-process could not start, use HTTP" —
@@ -417,10 +402,10 @@ async function callBegin({ apiBase, authToken, body }: any) {
   return json?.data || json;
 }
 
-/** POST finalize. Best-effort: failure logs but does not throw — the child
+/** Send `finalize`. Best-effort: failure logs but does not throw — the child
  *  has already run, we don't want to mask its return value with a backend
  *  hiccup on the closeout call. */
-async function callFinalize({ apiBase, authToken, payload }: any) {
+async function callFinalize({ connection, payload }: any) {
   // "Best-effort" was exactly the reasoning that left this unbounded, and it is
   // the wrong reasoning: a call whose RESULT nobody needs still blocks the
   // parent while it waits for one. The child has already finished by the time
@@ -428,12 +413,7 @@ async function callFinalize({ apiBase, authToken, payload }: any) {
   // for a closeout nobody reads. Same provisioning-class budget as `begin`.
   const dl = deadlineFor('SUBGRAPH_TRIGGER_TIMEOUT_MS', SUBGRAPH_TRIGGER_TIMEOUT_MS);
   try {
-    const resp = await fetch(`${apiBase}/internal/subgraph/finalize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify(payload),
-      signal: dl.signal,
-    });
+    const resp = await connection.send({ call: 'finalize', body: payload, signal: dl.signal });
     if (!resp.ok) {
       logger.warn(`[in-process subgraph] finalize returned ${resp.status} for ${payload.childExecutionId}`);
     }
@@ -604,18 +584,13 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
   // still read parentCtx here because subsequent code uses it.
   const parentCtx = getExecContext();
 
-  // Env preconditions.
-  let env;
-  try { env = readDispatchEnv(); } catch (e) {
-    // env-missing is a fallback signal, not a hard error.
-    throw e;
-  }
+  // The host's connection — missing is a fallback signal, not a hard error.
+  const connection = openInProcessConnection();
 
   // 1. Mint child EXEC row server-side + get presigned bundle URL.
   logger.debug(`[in-process subgraph] begin '${workflowName}' parent=${parentCtx.executionId || '<root>'}`);
   const begin = await callBegin({
-    apiBase: env.apiBase,
-    authToken: env.authToken,
+    connection,
     body: {
       parentExecutionId: parentCtx.executionId,
       // WHICH LINE this child goes out on — the node this dispatch is made
@@ -652,8 +627,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     // DISCARD the just-minted child row (nothing ran in-process) so the activity
     // tree shows ONLY the real HTTP run, not a dead 'canceled' sibling next to it.
     await callFinalize({
-      apiBase: env.apiBase,
-      authToken: env.authToken,
+      connection,
       payload: { childExecutionId, discard: true },
     });
     throw new SubgraphFallback('runtime-mismatch', `${mine} vs ${runtimeTag}`);
@@ -665,12 +639,11 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     // duplicates the cold-start runner's logic and is risky in v1. Let
     // HTTP handle it — the parent's wall-clock cost is the same as one
     // pre-in-process trigger, and the child still runs successfully.
-    // DISCARD the just-minted child row (nothing ran in-process — self-host
-    // children are source-only, so this is the COMMON path) so only the real
+    // DISCARD the just-minted child row (nothing ran in-process — where
+    // children are source-only this is the COMMON path) so only the real
     // HTTP run shows in the activity tree, not a spurious 'canceled' sibling.
     await callFinalize({
-      apiBase: env.apiBase,
-      authToken: env.authToken,
+      connection,
       payload: { childExecutionId, discard: true },
     });
     throw new SubgraphFallback('no-bundle', 'workflow bundle not built yet');
@@ -694,8 +667,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     } catch (err) {
       if (err.fallback) {
         await callFinalize({
-          apiBase: env.apiBase,
-          authToken: env.authToken,
+          connection,
           payload: {
             childExecutionId,
             status: 'failed',
@@ -714,8 +686,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     } catch (err) {
       registry.markFailed(workflowName, err);
       await callFinalize({
-        apiBase: env.apiBase,
-        authToken: env.authToken,
+        connection,
         payload: {
           childExecutionId,
           status: 'failed',
@@ -823,8 +794,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     // classification is path-independent.
     const timedOut = deadline.timedOut();
     await callFinalize({
-      apiBase: env.apiBase,
-      authToken: env.authToken,
+      connection,
       payload: {
         childExecutionId,
         status: timedOut ? 'timeout' : 'failed',
@@ -848,8 +818,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
   if (runResult && typeof runResult === 'object' && runResult.stoppedExternally) {
     const timedOut = deadline.timedOut();
     await callFinalize({
-      apiBase: env.apiBase,
-      authToken: env.authToken,
+      connection,
       payload: {
         childExecutionId,
         status: timedOut ? 'timeout' : 'canceled',
@@ -865,8 +834,7 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
   }
 
   await callFinalize({
-    apiBase: env.apiBase,
-    authToken: env.authToken,
+    connection,
     payload: {
       childExecutionId,
       status: 'completed',

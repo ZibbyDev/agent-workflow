@@ -287,6 +287,9 @@ export class Node {
           workspace: cwd,
           schema: this.isZodSchema ? this.outputSchema : null,
           skills: this.config.skills || [],
+          // Of those, the ones this node reaches through the tool search: the
+          // prompt carries each one's intro, its page travels with its tools.
+          searchSkills: this.config.searchSkills || [],
           // Per-node tool DENY list (least privilege, declaration-driven). A
           // node that only READS (a kb-sync fetch adapter) declares the write
           // tools it must never hold (`disallowedTools: ['mcp__gitlab__gitlab_accept_mr', …]`)

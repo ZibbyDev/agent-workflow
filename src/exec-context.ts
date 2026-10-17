@@ -73,7 +73,7 @@ export function getExecContext(): any {
   const store = _als.getStore();
   if (store) return store;
   // Legacy fallback — top-level cloud runs that haven't been wrapped
-  // yet. Env vars are set by workflow-executor.js. `agent`/`signal` have
+  // yet. Env vars are set by the platform's run executor. `agent`/`signal` have
   // no env equivalent (they're live objects), so they're null here — a
   // hand-rolled dispatchSubgraph outside any node scope keeps its prior
   // behavior (caller must pass them, or the in-process path runs agent-less).

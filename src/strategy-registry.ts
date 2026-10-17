@@ -14,7 +14,7 @@
 
 import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
-import { getSkill } from './skill-registry.js';
+import { getSkill, skillPromptText, searchedSkillIds } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 import { repositoryRulesParts, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
@@ -172,7 +172,7 @@ export function nodeOverrideInstructions(nodeConfig: any, { disallowedTools }: {
  * browser MCP server attached to frontend-specialist, resolved by the executor,
  * delivered into the run container, parsed by the CLI onto
  * state.extraMcpServers — and then dropped one line before the strategy, so the
- * QA node reported "no browser tools". Same executor-drift class as the model
+ * testing node reported "no browser tools". Same executor-drift class as the model
  * chain (resolveInvocationModel, above), same cure: derive, don't duplicate.
  * A field added here now reaches BOTH paths by construction.
  */
@@ -498,13 +498,16 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     const strategyRunsInProcessTools = strategy.name === 'assistant';
     const isMounted = (skill: any) =>
       skill?.inProcessOnly !== true || strategyRunsInProcessTools;
+    // The declared skills this node reaches through the tool search: their
+    // intro stands in for their page, which travels with their tools
+    // (skill-registry.ts skillPromptText).
+    const searched = searchedSkillIds(skills, finalOptions.searchSkills);
     const fragments = skills
       .map(id => {
         const skill = getSkill(id);
         if (!isAvailable(skill)) return null;
         if (!isMounted(skill)) return null;
-        const frag = skill?.promptFragment;
-        const text = typeof frag === 'function' ? frag() : frag;
+        const text = skill ? skillPromptText(skill, { searched: searched.has(id) }) : '';
         return text ? { id, text } : null;
       })
       .filter(Boolean);

@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   recordPersonLine, markPersonLineAnswered, unansweredPersonLines, unansweredLinesBlock,
-  unansweredLineNote, clearPersonLines, PERSON_ANSWER_TOOL,
+  unansweredLineNote, clearPersonLines, registerPersonAnswerTool, personAnswerTool,
 } from '../unanswered-lines.js';
 
 const L = { id: 'a1', from: 'You', text: 'how we doing?', sentAt: '2026-10-09T10:58:26.000Z', deliveredAtMs: 1, nodeName: 'Plan', activitySeq: 3 };
-beforeEach(() => clearPersonLines());
+beforeEach(() => { clearPersonLines(); registerPersonAnswerTool(null); });
 
 describe('unanswered person lines', () => {
   it('no lines -> empty block (every other prompt byte-identical)', () => {
@@ -38,6 +38,14 @@ describe('unanswered person lines', () => {
   });
   it('both invokeAgent paths append the one block (TWO-PLACES)', () => {
     expect(readFileSync(new URL('../strategy-registry.ts', import.meta.url), 'utf8')).toContain('unansweredLinesBlock()');
-    expect(PERSON_ANSWER_TOOL).toBe('report_progress');
+  });
+  it('the engine names no answer tool of its own; the host registers the one a person hears the run through', () => {
+    recordPersonLine(L);
+    expect(personAnswerTool()).toBeNull();
+    expect(unansweredLinesBlock()).not.toMatch(/They see the lines you send with/);
+    registerPersonAnswerTool('post_update');
+    expect(personAnswerTool()).toBe('post_update');
+    expect(unansweredLinesBlock()).toContain('not recorded. They see the lines you send with post_update as you work. A reply can name');
+    expect(() => registerPersonAnswerTool('  ')).toThrow(/tool name/);
   });
 });

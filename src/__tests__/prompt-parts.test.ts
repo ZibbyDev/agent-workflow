@@ -1,8 +1,7 @@
 /**
  * invokeAgent hands the strategy the prompt AND the named parts it assembled it
  * from (`promptParts`), so a continued conversation can be handed only the
- * parts it does not already hold (@zibby/core native-session.js;
- * run_log/developer/2026-10-14-token-cost).
+ * parts it does not already hold (a strategy's native-session handling).
  *
  * A/B: before this change the strategy saw the node's own `promptParts` (or
  * none), which are NOT the prompt it was handed — the concatenation and key

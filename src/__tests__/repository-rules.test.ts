@@ -12,6 +12,7 @@ import {
   workingChain, preparedProjectFolders, maskCredentials, REPOSITORY_RULE_FILES,
   RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, ruleLocationOf,
   preparedWorkspaces, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, RULE_FILE_INDEX_HEADING, pathIdentity,
+  registerCheckoutDirectories, checkoutDirectories,
 } from '../repository-rules.js';
 
 let base: string;
@@ -285,16 +286,30 @@ describe('invokeAgent delivers the block', () => {
 });
 
 describe('a node names the checkout it works on', () => {
-  it('discovers the platform checkout cache for the next node without following a linked cache', () => {
+  it('discovers the host\'s registered checkout directory for the next node without following a linked one', () => {
     const work = join(base, 'cached-workspace');
-    const clone = join(work, '.zibby', 'repos', 'svc');
+    const clone = join(work, '.cache', 'repos', 'svc');
     mkdirSync(join(clone, '.git'), { recursive: true });
     put(join(clone, 'CLAUDE.md'), 'CACHED_REPOSITORY_RULE');
-    expect(repositoryRulesBlock({ workspace: work, env: {} })).toContain('CACHED_REPOSITORY_RULE');
-    const linked = join(base, 'linked-cache-workspace');
-    mkdirSync(linked);
-    symlinkSync(join(work, '.zibby'), join(linked, '.zibby'));
-    expect(repositoryRulesBlock({ workspace: linked, env: {} })).toBe('');
+    // The engine knows no checkout directory of its own: a hidden one is skipped…
+    registerCheckoutDirectories([]);
+    expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');
+    // …until the host says its clone tools put repositories there.
+    registerCheckoutDirectories(['.cache/repos']);
+    try {
+      expect(checkoutDirectories()).toEqual(['.cache/repos']);
+      expect(repositoryRulesBlock({ workspace: work, env: {} })).toContain('CACHED_REPOSITORY_RULE');
+      const linked = join(base, 'linked-cache-workspace');
+      mkdirSync(linked);
+      symlinkSync(join(work, '.cache'), join(linked, '.cache'));
+      expect(repositoryRulesBlock({ workspace: linked, env: {} })).toBe('');
+    } finally { registerCheckoutDirectories([]); }
+  });
+
+  it('a checkout directory must be a relative path inside the working directory', () => {
+    expect(() => registerCheckoutDirectories(['/abs/repos'])).toThrow(/not a relative path/);
+    expect(() => registerCheckoutDirectories(['../up'])).toThrow(/not a relative path/);
+    expect(() => registerCheckoutDirectories([''])).toThrow(/not a relative path/);
   });
 
   it('repositoryRoots: a checkout outside the working directory (cloned by an earlier model call) is read like a prepared folder', () => {
@@ -306,7 +321,7 @@ describe('a node names the checkout it works on', () => {
     expect(repositoryRulesBlock({ workspace: work, env: {} })).toBe('');
     expect(repositoryRulesBlock({ workspace: work, env: {}, repositoryRoots: [clone] })).toContain('CLONED_REPOSITORY_RULE');
     // Only absolute paths; anything else is ignored, never resolved against the working directory.
-    expect(repositoryRulesBlock({ workspace: work, env: {}, repositoryRoots: ['.zibby/repos/svc', 42, null] })).toBe('');
+    expect(repositoryRulesBlock({ workspace: work, env: {}, repositoryRoots: ['.cache/repos/svc', 42, null] })).toBe('');
   });
 });
 
@@ -718,8 +733,8 @@ it('describes pending chat folders as on-demand while preserving ready-folder be
   expect(block).toContain('conversation that needs no files needs no preparation');
 });
 
-// A/B. A runner may mount one project folder at two places — the self-host
-// runner mounts each folder at its id AND at its real arrangement under
+// A/B. A runner may mount one project folder at two places — a container
+// runner can mount each folder at its id AND at its real arrangement under
 // `tree/`. The arranged path is the one the run is told; the id mount was found
 // by the checkout walk as "another checkout", so a primary folder's CLAUDE.md
 // went into every request twice (and a non-primary folder's rules were sent in
@@ -787,5 +802,22 @@ describe('one folder reached by two paths is one folder: its rules are sent once
     expect(pathIdentity(join(r, 'CLAUDE.md'))).toBe(pathIdentity(join(r, 'AGENTS.md')));
     expect(pathIdentity(join(r, 'GEMINI.md'))).not.toBe(pathIdentity(join(r, 'CLAUDE.md')));
     expect(pathIdentity(join(r, 'missing'))).toBeNull();
+  });
+});
+
+// A folder named inside a Git checkout:
+// the runner's `originalPath` is the checkout, its `directory` the subfolder inside the work area.
+// [A/B] before, the block said the CHECKOUT's files are beneath the subfolder's directory.
+describe('the folders block names the folder whose files are beneath each directory', () => {
+  const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [
+    { directory: '/workspace/local-project/tree/prd', originalPath: '/Users/example/app', folderPath: '/Users/example/app/prd', status: 'ready', access: 'editable' },
+    { directory: '/workspace/local-project/tree/backend', originalPath: '/Users/example/app/backend', status: 'ready', access: 'read-only' },
+  ] }) };
+  it('its own path when the runner states it, else the original as before', () => {
+    const block = preparedFoldersBlock(env);
+    expect(block).toContain('- /Users/example/app/prd → /workspace/local-project/tree/prd (editable)');
+    expect(block).not.toContain('- /Users/example/app → ');
+    expect(block).toContain('- /Users/example/app/backend → /workspace/local-project/tree/backend (read-only)');
+    expect(preparedWorkspaces(env).map((w) => w.originalPath)).toEqual(['/Users/example/app', '/Users/example/app/backend']);
   });
 });

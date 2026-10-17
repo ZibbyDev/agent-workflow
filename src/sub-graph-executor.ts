@@ -22,16 +22,13 @@
  *      the only option for async dispatches and the safety net for
  *      every in-process failure mode.
  *
- * Auth/URL plumbing comes from env vars already set on every Fargate
- * task by workflow-executor.js:
- *   - PROGRESS_API_URL  → "https://api-prod.zibby.app/executions"
- *   - PROJECT_API_TOKEN → bearer token scoped to this project
- *   - PROJECT_ID        → the project this workflow runs under
- *   - EXECUTION_ID      → parent's executionId (becomes child.parentExecutionId)
+ * WHERE the control plane is, which project the run belongs to and how to
+ * authenticate are the HOST's: every call goes over the host-registered
+ * child-run transport (child-run-transport.ts). `EXECUTION_ID` (the parent's
+ * own execution id) becomes the child's `parentExecutionId`.
  *
- * Local dev: when these env vars are missing, dispatch throws a clear
- * error. In-process is never attempted without PROJECT_API_TOKEN — we
- * keep the "no cloud creds = no sub-graphs" invariant from v1.
+ * A host that registered no transport cannot start child runs: dispatch
+ * throws a clear error (code CHILD_RUN_TRANSPORT_MISSING) rather than guess.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -41,6 +38,8 @@ import { runInProcessSubgraph, SubgraphFallback, subgraphTimeoutError } from './
 import { getExecContext } from './exec-context.js';
 import { normalizeEffort } from './strategy-registry.js';
 import { notSetUpError, refusalSaysNotSetUp } from './not-set-up.js';
+import { requireChildRunTransport } from './child-run-transport.js';
+import type { ChildRunResponse } from './child-run-transport.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10min — matches default Fargate cap
@@ -106,28 +105,10 @@ function pollDeadline(deadlineAt: number) {
   return makeDeadline(ms, 'SUBGRAPH_POLL_TIMEOUT_MS');
 }
 
-function getApiBase() {
-  const progress = process.env.PROGRESS_API_URL;
-  if (!progress) {
-    throw new Error(
-      'Sub-graph dispatch requires PROGRESS_API_URL env var (set automatically on cloud runs). '
-      + 'Sub-graphs are not supported in local in-process runs yet — deploy the parent and child to cloud.',
-    );
-  }
-  // PROGRESS_API_URL is `<base>/executions`; strip that suffix to get the base.
-  return progress.replace(/\/executions\/?$/, '');
-}
-
-function getProjectId() {
-  const id = process.env.PROJECT_ID;
-  if (!id) throw new Error('Sub-graph dispatch requires PROJECT_ID env var.');
-  return id;
-}
-
-function getAuthToken() {
-  const tok = process.env.PROJECT_API_TOKEN;
-  if (!tok) throw new Error('Sub-graph dispatch requires PROJECT_API_TOKEN env var.');
-  return tok;
+/** A connection for one remote dispatch, over the host's transport. Throws
+ * (with the host's own words) when child runs cannot be reached from here. */
+function openRemote(what: string) {
+  return requireChildRunTransport(what).open('remote');
 }
 
 function getParentExecutionId() {
@@ -145,7 +126,7 @@ function getParentExecutionId() {
  * null when nothing published it (a hand-rolled dispatch outside any node, or a
  * deployed agent still pinned to an engine that predates this). The backend
  * then falls back to the parent's own in-flight step, and the canvas stays dark
- * rather than guessing — see backend services/dispatch-origin.js.
+ * rather than guessing.
  */
 function getDispatchNodeId(): string | null {
   const id = getExecContext().nodeId;
@@ -322,8 +303,8 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // publishes the current graph's agent + abort signal into the ALS
   // exec-context (graph.ts withAgentContext), so default from there when the
   // caller didn't pass them — WITHOUT it the in-process child ran agent-less
-  // (LLM nodes fail) or fell back to HTTP (which hangs the parent on
-  // self-host). An EXPLICIT parentAgent/signal always wins (only fill a gap).
+  // (LLM nodes fail) or fell back to the remote path (which can hang the
+  // parent where children cannot start remotely). An EXPLICIT parentAgent/signal always wins (only fill a gap).
   if (options.parentAgent == null && parentCtx.agent) options.parentAgent = parentCtx.agent;
   if (options.signal == null && parentCtx.signal) options.signal = parentCtx.signal;
 
@@ -363,6 +344,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   if (
     process.env.ZIBBY_INPROCESS_SUBGRAPH !== '0'
     && !options.async
+    // An explicit execution choice belongs to a recorded child execution;
+    // the in-process path cannot allocate its selected runtime/resources.
+    && !options.executionChoice
     // A participant binding intentionally crosses workflow/vendor identity
     // and must run as its own execution. It can never borrow the parent's
     // process, credentials or custom MCP surface.
@@ -401,23 +385,15 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     }
   }
 
-  const apiBase = getApiBase();
-  const projectId = getProjectId();
-  const authToken = getAuthToken();
+  const remote = openRemote(`dispatchSubgraph('${workflowName}')`);
   const parentExecutionId = getParentExecutionId();
 
-  // The reserved URL slug carries no authority for participant dispatch. The
-  // backend resolves parent execution -> host UUID -> binding -> worker UUID
-  // and ignores this slug after routing. Ordinary subgraphs keep their exact
-  // historical URL.
-  const triggerWorkflowName = options.participantBindingId ? 'participant' : workflowName;
-  const triggerUrl = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(triggerWorkflowName)}/trigger`;
   // THE CHILD'S ID, PROPOSED BY THIS PARENT. A trigger whose answer never
   // arrives (a deadline, a dropped connection) leaves "did the child start?"
   // UNKNOWN — and on 2026-09-24 a manager read that silence as "no", while the
   // platform created the child a minute later with nobody claiming it. With the
   // id chosen here, the caller can look the child up, and a platform that
-  // honours it (backend handlers/workflow-trigger.js) answers the same request
+  // honours it answers the same request
   // sent again with the run it already started. A platform that does not know
   // the field ignores it and mints its own id, exactly as before.
   const proposedExecutionId = parentExecutionId
@@ -425,6 +401,7 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     : null;
   const body: any = {
     input: options.input || {},
+    ...(options.executionChoice ? { executionChoice: options.executionChoice } : {}),
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(proposedExecutionId ? { executionId: proposedExecutionId } : {}),
     ...(getDispatchNodeId() ? { dispatchNodeId: getDispatchNodeId() } : {}),
@@ -448,15 +425,12 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // A FRESH deadline for THIS dispatch — see the budget note up top for why a
   // parallel fan-out must not share one.
   const triggerDl = triggerDeadline();
-  let triggerResp: Response;
+  let triggerResp: ChildRunResponse;
   try {
-    triggerResp = await settleWithin(fetch(triggerUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
-      },
-      body: JSON.stringify(body),
+    triggerResp = await settleWithin(remote.send({
+      call: 'trigger',
+      workflow: workflowName,
+      body,
       signal: triggerDl.signal,
     }), triggerDl.signal);
   } catch (err: any) {
@@ -595,7 +569,6 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
   // path — do NOT re-derive it here (that split is what made the knob inert
   // on the default path).
   const pollIntervalMs = Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : DEFAULT_POLL_INTERVAL_MS;
-  const statusUrl = `${apiBase}/executions/${encodeURIComponent(jobId)}`;
   const deadline = Date.now() + timeoutMs;
 
   let lastStatus = 'accepted';
@@ -624,10 +597,11 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     // read BETWEEN iterations, so one fetch that never settles parks the loop
     // inside a single iteration and `timeoutMs` is never consulted again.
     const pollDl = pollDeadline(deadline);
-    let statusResp: Response;
+    let statusResp: ChildRunResponse;
     try {
-      statusResp = await settleWithin(fetch(statusUrl, {
-        headers: { Authorization: `Bearer ${authToken}` },
+      statusResp = await settleWithin(remote.send({
+        call: 'status',
+        jobId,
         signal: pollDl.signal,
       }), pollDl.signal);
     } catch (e: any) {
@@ -690,9 +664,9 @@ export async function dispatchSubgraph(workflowName, options: any = {}) {
     // cleanup attempt deliberately tiny so best-effort cancellation cannot
     // become a second, hidden execution timeout of its own.
     const cancelDl = makeDeadline(500, 'SUBGRAPH_CANCEL_TIMEOUT_MS');
-    const cancelResp = await settleWithin(fetch(`${statusUrl}/cancel`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
+    const cancelResp = await settleWithin(remote.send({
+      call: 'cancel',
+      jobId,
       signal: cancelDl.signal,
     }), cancelDl.signal);
     if (!cancelResp.ok && cancelResp.status !== 400 && cancelResp.status !== 404) {
@@ -729,30 +703,25 @@ export async function dispatchParticipant(bindingId: string, options: any = {}) 
 
 /**
  * Read the enabled, protocol-authorized participant roster owned by the
- * currently-running workflow. Uses the reserved participant trigger door so
- * cloud adds no new API resource; the backend returns before credit/spawn gates.
+ * currently-running workflow, through the host's transport (`participants`).
  */
 export async function listParticipants(protocolId: string) {
   if (!protocolId || typeof protocolId !== 'string') {
     throw new Error('listParticipants: protocolId (string) is required');
   }
-  const apiBase = getApiBase();
-  const projectId = getProjectId();
-  const authToken = getAuthToken();
+  const remote = openRemote(`listParticipants('${protocolId}')`);
   const parentExecutionId = getParentExecutionId();
   if (!parentExecutionId) {
     const e: any = new Error('Collaboration requires a running parent execution');
     e.code = 'PARENT_EXECUTION_REQUIRED';
     throw e;
   }
-  const url = `${apiBase}/projects/${encodeURIComponent(projectId)}/workflows/participant/trigger`;
   const dl = triggerDeadline();
-  let response: Response;
+  let response: ChildRunResponse;
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ participantOperation: 'list', parentExecutionId, protocolId }),
+    response = await remote.send({
+      call: 'participants',
+      body: { parentExecutionId, protocolId },
       signal: dl.signal,
     });
   } catch (err: any) {

@@ -8,15 +8,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSubgraph } from '../sub-graph-executor.js';
 import { runInProcessSubgraph } from '../in-process-subgraph.js';
 import * as registry from '../subgraph-registry.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
 
-const ENV_KEYS = ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH'];
+const ENV_KEYS = ['EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH'];
 const ORIG: Record<string, any> = {};
 
 beforeEach(() => {
   for (const k of ENV_KEYS) ORIG[k] = process.env[k];
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-1';
   registry._reset();
 });
@@ -27,6 +26,7 @@ afterEach(() => {
     else process.env[k] = ORIG[k];
   }
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
 const json = (body: any, status = 200) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });

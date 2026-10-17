@@ -164,14 +164,61 @@ export interface RuleFile {
 const isFile = (p: string) => { try { return lstatSync(p).isFile(); } catch { return false; } };
 const isRealDir = (p: string) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
 
+/*
+ * CHECKOUT DIRECTORIES — where the HOST's clone tools put repositories, as
+ * paths relative to a node's working directory (e.g. `.cache/repos`). Hidden
+ * and dependency folders are skipped by the walk as a class; a host that
+ * clones into one registers it so later nodes still discover those checkouts.
+ * The engine knows none of its own. Every segment must be a real directory
+ * (a symlinked one is never followed). Kept on globalThis so every loaded
+ * copy of the engine sees what the host registered through any of them.
+ */
+const CHECKOUT_DIRS_KEY = Symbol.for('agent-workflow.checkoutDirectories');
+const checkoutSlot = globalThis as unknown as Record<symbol, string[][] | undefined>;
+
+/** Register the host's checkout directories (relative paths). Replaces any earlier list; `[]` clears it. */
+export function registerCheckoutDirectories(paths: string[]): void {
+  if (!Array.isArray(paths)) throw new Error('registerCheckoutDirectories expects an array of relative paths');
+  const parsed: string[][] = [];
+  for (const p of paths) {
+    const segments = typeof p === 'string' ? p.split(/[\\/]+/).filter(Boolean) : [];
+    if (!segments.length || isAbsolute(p) || segments.some((seg) => seg === '.' || seg === '..')) {
+      throw new Error(`registerCheckoutDirectories: ${JSON.stringify(p)} is not a relative path inside the working directory`);
+    }
+    parsed.push(segments);
+  }
+  checkoutSlot[CHECKOUT_DIRS_KEY] = parsed;
+}
+
+/** The registered checkout directories, as relative paths. */
+export function checkoutDirectories(): string[] {
+  return (checkoutSlot[CHECKOUT_DIRS_KEY] || []).map((segments) => segments.join('/'));
+}
+
+/** The registered checkout directories that start at `entry` under `dir`, every segment a real directory. */
+function checkoutDirsUnder(dir: string, entry: string): string[] {
+  const out: string[] = [];
+  for (const segments of checkoutSlot[CHECKOUT_DIRS_KEY] || []) {
+    if (segments[0] !== entry) continue;
+    let cur = join(dir, entry);
+    let real = true;
+    for (const seg of segments.slice(1)) {
+      cur = join(cur, seg);
+      if (!isRealDir(cur)) { real = false; break; }
+    }
+    if (real) out.push(cur);
+  }
+  return out;
+}
+
 /**
  * What a path IS on disk, as the filesystem itself says: its device and inode
  * (never following a symlink); null when the filesystem gives no inode or the
  * path cannot be read. Two paths with the same identity are one file or one
  * folder, however they are spelled.
  *
- * WHY. A runner may mount one folder at more than one place: the self-host
- * runner mounts every project folder of a run at its id
+ * WHY. A runner may mount one folder at more than one place: a container
+ * runner can mount every project folder of a run at its id
  * (`/workspace/local-project/<id>`) AND at its real arrangement
  * (`/workspace/local-project/tree/<relative path>`) — the same folder twice.
  * Compared by spelling, the second mount was "another checkout": its rule
@@ -457,14 +504,17 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
       entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const e of entries) {
         if (!e.isDirectory() || e.isSymbolicLink()) continue;
-        // git_checkout stores repositories here. Hidden configuration/cache
-        // directories otherwise stay outside the walk; only this platform
-        // checkout directory participates in discovery for subsequent nodes.
-        if (includeCheckoutCache && depth === 0 && e.name === '.zibby') {
-          const repos = join(dir, e.name, 'repos');
-          if (isRealDir(repos)) found.push({ dir: repos, repo: null, name: 'repos', ownRepo: false, cache: true });
+        if (e.name.startsWith('.') || DEPENDENCY_DIRS.has(e.name)) {
+          // The host's clone tools store repositories in a checkout directory
+          // the walk would otherwise skip; only those participate in discovery
+          // for subsequent nodes (registerCheckoutDirectories).
+          if (includeCheckoutCache && depth === 0) {
+            for (const cache of checkoutDirsUnder(dir, e.name)) {
+              found.push({ dir: cache, repo: null, name: basename(cache), ownRepo: false, cache: true });
+            }
+          }
+          continue;
         }
-        if (e.name.startsWith('.') || DEPENDENCY_DIRS.has(e.name)) continue;
         const child = join(dir, e.name);
         const ownRepo = honourIgnore && existsSync(join(child, '.git'));
         found.push({ dir: child, repo: ownRepo ? child : repo, name: e.name, ownRepo, cache: false });
@@ -512,6 +562,14 @@ export interface PreparedWorkspace {
   directory: string;
   /** Where it really is on the person's disk ('' when the manifest does not say). */
   originalPath: string;
+  /**
+   * The folder on the person's disk whose files are beneath `directory`, as the
+   * runner states it (`folderPath`). It differs from `originalPath` for a
+   * folder named inside a Git checkout: `originalPath` is the checkout, this
+   * is the checkout plus the subfolder.
+   * '' when the runner does not say.
+   */
+  folderPath: string;
   /** The folder the work is about. */
   primary: boolean;
   /**
@@ -548,6 +606,7 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
       directory: typeof w.directory === 'string' ? w.directory : typeof w.path === 'string' ? w.path : '',
       ...(w.status === 'pending' ? { pending: true } : {}),
       originalPath: abs(w.originalPath) && normalize(w.originalPath) === w.originalPath ? w.originalPath : '',
+      folderPath: abs(w.folderPath) && normalize(w.folderPath) === w.folderPath ? w.folderPath : '',
       marked: w.isPrimary === true,
       access: w.access === 'read-only' ? 'read-only' : 'editable',
       ancestorRuleFiles: (Array.isArray(w.ancestorRuleFiles) ? w.ancestorRuleFiles : []).filter(abs).slice(0, MAX_ANCESTOR_FILES),
@@ -605,7 +664,7 @@ export function preparedFoldersBlock(env: Record<string, string | undefined> = p
     (folders.some(w => w.pending) ? 'The left path is on the person\'s computer; the right path is its location in this run. Folders marked not prepared yet have no files there until you request them. ' : 'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. ')
     + (outside.length ? 'Paths outside these folders are unavailable here, except the files listed after the folders. ' : 'Paths outside these folders are unavailable here. ')
     + 'The word after each folder is its access as this run was given it when it started: editable — files there can be changed and saved work can land in it; read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it.',
-    ...folders.map((w) => `- ${w.originalPath} → ${w.directory} (${w.access}${w.pending ? '; not prepared yet' : ''})`),
+    ...folders.map((w) => `- ${w.folderPath || w.originalPath} → ${w.directory} (${w.access}${w.pending ? '; not prepared yet' : ''})`),
     ...(folders.some(w => w.pending) ? ['For a folder marked not prepared yet, call prepare_workspaces only when you need its files, using its id from list_workspaces. The tool returns ready paths and repository instructions; then use your native file and command tools there. A conversation that needs no files needs no preparation.'] : []),
     ...(outside.length ? [
       'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',

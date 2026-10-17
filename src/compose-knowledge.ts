@@ -8,15 +8,15 @@
  * HERE — next to the primitives they describe — and are IMPORTED by all three
  * consumers instead of being hand-copied:
  *
- *   1. the Copilot chat-ops skill (@zibby/skills-internal zibby-control-plane
- *      promptFragment — the COMPOSE bullet),
+ *   1. a chat assistant's operations skill (its promptFragment — the COMPOSE
+ *      bullet),
  *   2. the agent-builder marketplace template (generate node's authoring
  *      knowledge block),
- *   3. the `zibby init` CLAUDE.md §10 (stamped between managed markers by
- *      packages/scripts/sync-compose-knowledge.mjs).
+ *   3. a project's generated agent instructions (stamped between managed
+ *      markers by a sync script).
  *
  * Each consumer may ADD its own surface-specific glue (delegation mechanics,
- * CLI commands, self-host caveats) but must not restate these rules. Editing
+ * CLI commands, deployment caveats) but must not restate these rules. Editing
  * policy: change the text here, bump this package, let the consumers re-sync
  * — never edit a consumer's copy in place.
  *

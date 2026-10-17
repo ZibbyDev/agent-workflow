@@ -38,6 +38,7 @@ import { timeline } from './timeline.js';
 import {
   CHAT_ENTRY_FLAG, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
 } from './chat-entry.js';
+import { chatAttachmentsUnreadable, resolveChatAttachments } from './chat-attachments.js';
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
@@ -950,7 +951,7 @@ export class WorkflowGraph {
       // The platform reads it off the deployed row to decide who answers a
       // person chatting on this agent's page: the agent itself (its run, with
       // this node's model call carrying the message — see chat-entry.ts and
-      // run() below) instead of the Copilot speaking about it. Whitelisted
+      // run() below) instead of an assistant speaking about it. Whitelisted
       // because this block is an allowlist (see `uses` above); validated below
       // once every node's config is known.
       if (declaresChatEntry(node)) {
@@ -1290,8 +1291,8 @@ export class WorkflowGraph {
     // `prUrl` and derives owner/repo/prNumber).
     //
     // Such code used to live in an overridden `Agent.run()`, which LOOKS like
-    // the run boundary but is not the one that executes: every real run —
-    // cloud and self-host — goes through the CLI runner, which calls
+    // the run boundary but is not the one that executes: every real run
+    // goes through the CLI runner, which calls
     // `agent.buildGraph()` and then `graph.run(agent, initialState)` DIRECTLY.
     // `agent.run()` is never invoked there, so the normalization silently did
     // nothing in production while passing every local test and unit test. The
@@ -1422,6 +1423,14 @@ export class WorkflowGraph {
       if (!chatNodeId) {
         const e: any = new Error('This agent does not take chat messages: no node in its graph declares chatEntry');
         e.code = 'CHAT_ENTRY_UNDECLARED';
+        throw e;
+      }
+      // Attached files the host cannot open are refused here, before any node
+      // runs — never dropped silently (chat-attachments.ts).
+      const unreadable = chatAttachmentsUnreadable(chatTurn.attachments);
+      if (unreadable) {
+        const e: any = new Error(unreadable);
+        e.code = 'CHAT_ATTACHMENTS_UNREADABLE';
         throw e;
       }
       timeline.step(`Chat turn — '${chatNodeId}' answers the person`);
@@ -1717,13 +1726,18 @@ export class WorkflowGraph {
         // A CHAT call carries the conversation and the person's words after the
         // node's own prompt, and sends no structured-answer schema: the reply is
         // free text and it is what the person reads.
-        const strategyPromise = rawInvokeAgent(chatCall ? `${prompt}\n${renderChatTurn(chatTurn as any)}` : prompt, ctx, {
+        const attachmentFiles = chatCall && chatTurn?.attachments?.length
+          ? await resolveChatAttachments(chatTurn.attachments, internalAbortController.signal) : null;
+        const fileBlock = attachmentFiles?.files.length
+          ? `\nAttached files (read these local files to inspect their contents):\n${attachmentFiles.files.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : '';
+        const strategyPromise = rawInvokeAgent(chatCall ? `${prompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : prompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
           ...declaredInvokeOpts,  // the node's own declaration (compactAtTokens)
           ...opts,                // caller-explicit overrides
           ...(chatCall ? { schema: undefined } : {}),
+          ...(attachmentFiles?.images.length ? { images: [...(Array.isArray(opts.images) ? opts.images : []), ...attachmentFiles.images] } : {}),
           signal: internalAbortController.signal,  // engine always wins
-        });
+        }).finally(() => attachmentFiles?.cleanup());
         // The reply leaves the moment the model returns — before the node's own
         // bookkeeping and the rest of the run — so the person is not kept
         // waiting on work that is not an answer to them. Awaited, so a run that
@@ -1901,7 +1915,7 @@ export class WorkflowGraph {
             // Close the node's box FIRST. This return used to skip
             // nodeComplete/nodeFailed, so the timeline's stdout interceptor
             // stayed installed for the life of the process — every later
-            // turn in a long-lived runtime (the self-host Copilot container)
+            // turn in a long-lived runtime (one process serving many turns)
             // printed one more `│ ` per stopped turn, and its stderr lines
             // arrived triple-guttered where the log readers no longer
             // recognised them. Measured on a box: two superseded turns →

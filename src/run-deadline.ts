@@ -14,7 +14,7 @@
  * the EARLIER of them wins:
  *   • RUN_DEADLINE_AT — the ISO time the platform stamped on the execution row
  *     as `runtimeDeadlineAt` (dispatch time + the resolved cap), injected into
- *     the run container by workflow-executor.js from the SAME value. The
+ *     the run container by the platform's run executor from the SAME value. The
  *     reapers close the row at it; a run that waited for a slot has already
  *     spent part of its limit, and only this clock knows that.
  *   • MAX_WORKFLOW_DURATION_MS from this process's start — the in-container

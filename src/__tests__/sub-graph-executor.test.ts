@@ -2,13 +2,15 @@
  * Tests for dispatchSubgraph — the HTTP dispatcher that powers
  * `{ workflow: 'other-name' }` sub-graph nodes.
  *
- * fetch is stubbed via vi.stubGlobal so we never hit the network. Each
- * test sets the env vars that the executor expects (PROGRESS_API_URL,
- * PROJECT_ID, PROJECT_API_TOKEN, EXECUTION_ID) before invoking.
+ * fetch is stubbed via vi.stubGlobal so we never hit the network; a fake
+ * host transport (helpers/child-run-transport.ts) addresses the engine's
+ * calls to an example control plane, and EXECUTION_ID names the parent.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSubgraph, dispatchParticipant, listParticipants } from '../sub-graph-executor.js';
 import { isNotSetUp } from '../not-set-up.js';
+import { installTestChildRunTransport, removeTestChildRunTransport } from './helpers/child-run-transport.js';
+import { registerChildRunTransport } from '../child-run-transport.js';
 
 function mockResponse({ ok = true, status = 200, json } = {}) {
   return {
@@ -22,12 +24,10 @@ function mockResponse({ ok = true, status = 200, json } = {}) {
 const ORIGINAL_ENV = {};
 
 beforeEach(() => {
-  ['PROGRESS_API_URL', 'PROJECT_ID', 'PROJECT_API_TOKEN', 'EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH'].forEach((k) => {
+  ['EXECUTION_ID', 'ZIBBY_INPROCESS_SUBGRAPH'].forEach((k) => {
     ORIGINAL_ENV[k] = process.env[k];
   });
-  process.env.PROGRESS_API_URL = 'https://api.example.com/executions';
-  process.env.PROJECT_ID = 'proj-1';
-  process.env.PROJECT_API_TOKEN = 'tok-abc';
+  installTestChildRunTransport();
   process.env.EXECUTION_ID = 'parent-exec-99';
   // Opt out of the in-process fast path so these tests can keep
   // asserting on the HTTP /trigger → poll → finalState sequence. The
@@ -41,22 +41,49 @@ afterEach(() => {
     else process.env[k] = ORIGINAL_ENV[k];
   });
   vi.unstubAllGlobals();
+  removeTestChildRunTransport();
 });
 
-describe('dispatchSubgraph — env preconditions', () => {
-  it('throws if PROGRESS_API_URL is unset (local/in-process dispatch not supported)', async () => {
-    delete process.env.PROGRESS_API_URL;
-    await expect(dispatchSubgraph('child', { input: {} })).rejects.toThrow(/PROGRESS_API_URL/);
+describe('dispatchSubgraph — the host transport', () => {
+  it('a host with no transport cannot start a child: a clear, typed error and no request', async () => {
+    removeTestChildRunTransport();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(dispatchSubgraph('child', { input: {} })).rejects.toMatchObject({
+      code: 'CHILD_RUN_TRANSPORT_MISSING',
+      message: expect.stringMatching(/dispatchSubgraph\('child'\): the host running this workflow provides no way to start child runs/),
+    });
+    await expect(listParticipants('p1')).rejects.toMatchObject({ code: 'CHILD_RUN_TRANSPORT_MISSING' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('throws if PROJECT_ID is unset', async () => {
-    delete process.env.PROJECT_ID;
-    await expect(dispatchSubgraph('child')).rejects.toThrow(/PROJECT_ID/);
+  it('a host that cannot reach child runs from here says so in its own words, before any request', async () => {
+    registerChildRunTransport({ open() { throw new Error('host: control plane address is not configured'); } } as any);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(dispatchSubgraph('child', { async: true })).rejects.toThrow('host: control plane address is not configured');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('throws if PROJECT_API_TOKEN is unset', async () => {
-    delete process.env.PROJECT_API_TOKEN;
-    await expect(dispatchSubgraph('child')).rejects.toThrow(/PROJECT_API_TOKEN/);
+  it('the engine hands the host named calls — never a URL — and one connection per dispatch', async () => {
+    const calls: any[] = [];
+    const opened: string[] = [];
+    const answers: any = {
+      trigger: { ok: true, status: 200, json: async () => ({ jobId: 'job-1' }), text: async () => '' },
+      status: { ok: true, status: 200, json: async () => ({ data: { status: 'completed', finalState: { done: 1 } } }), text: async () => '' },
+    };
+    registerChildRunTransport({
+      open(kind) {
+        opened.push(kind);
+        return { async send(call) { calls.push(call); return answers[call.call]; } };
+      },
+    });
+    const out = await dispatchSubgraph('child', { input: { a: 1 }, pollIntervalMs: 1 });
+    expect(out).toEqual({ done: 1 });
+    expect(opened).toEqual(['remote']);
+    expect(calls.map((c) => [c.call, c.workflow || c.jobId])).toEqual([['trigger', 'child'], ['status', 'job-1']]);
+    expect(calls[0].body).toMatchObject({ input: { a: 1 }, parentExecutionId: 'parent-exec-99' });
+    expect(calls.every((c) => c.signal instanceof AbortSignal)).toBe(true);
   });
 
   it('throws if workflowName is missing or not a string', async () => {
@@ -125,6 +152,18 @@ describe('dispatchSubgraph — async (fire-and-forget) mode', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.conversationId).toBe('slack:T123:t456');
   });
+
+  it('passes an explicit execution choice to the child trigger outside input', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ json: { jobId: 'shared-child' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const executionChoice = { version: 1, executor: 'shared', resources: { sandbox: { decision: 'withhold' } } };
+
+    await dispatchSubgraph('child', { input: { instruction: 'Check the PRD' }, async: true, executionChoice });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.executionChoice).toEqual(executionChoice);
+    expect(body.input).toEqual({ instruction: 'Check the PRD' });
+  });
 });
 
 describe('dispatchParticipant — UUID binding dispatch', () => {
@@ -190,6 +229,21 @@ describe('dispatchParticipant — UUID binding dispatch', () => {
 });
 
 describe('dispatchSubgraph — sync mode', () => {
+  it('honors an explicit shared choice even when the in-process path is enabled', async () => {
+    process.env.ZIBBY_INPROCESS_SUBGRAPH = '1';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse({ json: { jobId: 'shared-child' } }))
+      .mockResolvedValueOnce(mockResponse({ json: { data: { status: 'completed', finalState: { ok: true } } } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const executionChoice = { version: 1, executor: 'shared', resources: { sandbox: { decision: 'withhold' } } };
+
+    await expect(dispatchSubgraph('child', { input: { instruction: 'Check the PRD' }, executionChoice, pollIntervalMs: 1 }))
+      .resolves.toEqual({ ok: true });
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.com/projects/proj-1/workflows/child/trigger');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).executionChoice).toEqual(executionChoice);
+  });
+
   it('polls the child execution until terminal completion and returns final state', async () => {
     const fetchMock = vi.fn()
       // 1: trigger POST → returns jobId
@@ -333,7 +387,7 @@ describe('dispatchSubgraph — auth + context propagation (LangGraph #5700 regre
   // executionId must reach every child trigger. These tests pin the
   // invariant so we don't ship the equivalent regression.
 
-  it('every sub-graph POST carries the parent task\'s PROJECT_API_TOKEN as Bearer', async () => {
+  it('every sub-graph POST carries the host\'s credential', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({ json: { jobId: 'c', status: 'accepted' } }),
     );
@@ -345,7 +399,7 @@ describe('dispatchSubgraph — auth + context propagation (LangGraph #5700 regre
     expect(init.headers.Authorization).toBe('Bearer tok-abc');
   });
 
-  it('every sub-graph POST routes to the parent task\'s PROJECT_ID (no cross-project leakage)', async () => {
+  it('every sub-graph POST routes to the host\'s project (no cross-project leakage)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({ json: { jobId: 'c', status: 'accepted' } }),
     );
@@ -380,9 +434,9 @@ describe('dispatchSubgraph — auth + context propagation (LangGraph #5700 regre
     expect(asyncBody.parentExecutionId).toBe('parent-exec-99');
   });
 
-  it('auth check fires even on async dispatch (regression: don\'t skip the check on fast-path)', async () => {
-    delete process.env.PROJECT_API_TOKEN;
-    await expect(dispatchSubgraph('child', { async: true })).rejects.toThrow(/PROJECT_API_TOKEN/);
+  it('the host\'s connection check fires even on async dispatch (regression: don\'t skip the check on fast-path)', async () => {
+    registerChildRunTransport({ open() { throw new Error('no credentials for child runs'); } } as any);
+    await expect(dispatchSubgraph('child', { async: true })).rejects.toThrow(/no credentials for child runs/);
   });
 });
 
@@ -437,12 +491,12 @@ describe('dispatchSubgraph — quota + validation guards (the trigger endpoint e
   });
 
   it('INPUT_INVALID → SUBGRAPH_INVALID_INPUT carrying the platform\'s sentence (child, fields, sender), never retryable', async () => {
-    const said = 'product-owner was not started: its input does not meet what it declares. The input fits none of this agent\'s jobs: … Sent by the run p-1 (manager) that dispatched it.';
+    const said = 'planner was not started: its input does not meet what it declares. The input fits none of this agent\'s jobs: … Sent by the run p-1 that dispatched it.';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       mockResponse({ ok: false, status: 400, json: { error: said, code: 'INPUT_INVALID', retryable: false, missing: ['prdUrl', 'prdText', 'prdTicketKey', 'ticketKey'], validationErrors: [{ kind: 'union', path: '' }] } }),
     ));
     let caught;
-    try { await dispatchSubgraph('product-owner', { input: { instruction: 'redo it' } }); } catch (e) { caught = e; }
+    try { await dispatchSubgraph('planner', { input: { instruction: 'redo it' } }); } catch (e) { caught = e; }
     expect(caught.code).toBe('SUBGRAPH_INVALID_INPUT');
     expect(caught.platformCode).toBe('INPUT_INVALID');
     expect(caught.message).toContain(said);
@@ -580,7 +634,7 @@ describe('dispatchSubgraph — auto-supply parentAgent/signal from exec-context'
   // The engine wraps each node's execute() in withAgentContext(agent, signal),
   // so a HAND-ROLLED dispatchSubgraph inside a custom node inherits the parent
   // agent + cancel signal automatically — the documented fan-out pattern that
-  // previously ran the child agent-less / hung on self-host. The defaulting
+  // previously ran the child agent-less / hung. The defaulting
   // happens before the in-process/HTTP branch, so it's observable as a mutation
   // of the passed options (async:true keeps the HTTP stub trivial).
   it('fills parentAgent + signal from the active context when the caller omits them', async () => {

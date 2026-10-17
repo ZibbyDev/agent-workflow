@@ -46,7 +46,7 @@ afterAll(() => {
 
 describe('freshly built dist artifacts share ONE logger state', () => {
   it('emits both dist/index.js and dist/logger.js as separate bundles', () => {
-    // Not an aspiration — the self-host image build depends on the per-file
+    // Not an aspiration — a container image build may depend on the per-file
     // emit existing. If this ever stops being true, the fix below stops
     // being necessary AND that Dockerfile assert breaks; either way a human
     // must look.

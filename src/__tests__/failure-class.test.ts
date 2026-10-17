@@ -146,7 +146,7 @@ describe('TRANSIENT — real network/stream shapes only', () => {
     'status: 429',
     '502 Bad Gateway',
     'rate_limit_error',
-    "Node 'QA' failed after 1 attempt(s): Selected model is at capacity. Please try a different model.",
+    "Node 'verify' failed after 1 attempt(s): Selected model is at capacity. Please try a different model.",
   ])('%s → transient', (s) => {
     expect(classifyFailure(s)).toBe('transient');
   });
@@ -185,7 +185,7 @@ describe('DETERMINISTIC — the failures that repeat identically', () => {
   it('a CANCELLED run is never retried, however it is worded', () => {
     expect(classifyFailure('AbortError: The operation was aborted')).toBe('deterministic');
     expect(classifyFailure("Sub-graph 'developer' canceled by parent abort")).toBe('deterministic');
-    expect(classifyFailure('stopped by operator from the self-host dashboard')).toBe('deterministic');
+    expect(classifyFailure('stopped by operator from the dashboard')).toBe('deterministic');
     // …even when it also carries a transient-looking phrase.
     const err: any = new Error('AbortError: fetch failed after stream idle timeout');
     err.name = 'AbortError';
