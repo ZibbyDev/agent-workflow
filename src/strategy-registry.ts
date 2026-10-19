@@ -19,6 +19,7 @@ import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
 import { repositoryRulesParts, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
 import { unansweredLinesBlock } from './unanswered-lines.js';
+import { unavailableToolsBlock } from './unavailable-tools.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -549,6 +550,13 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     });
     add('stores', `\n\nAVAILABLE STORES (pick a store by its description and pass its NAME to the store tool):\n${lines.join('\n')}`);
   }
+
+  // AN OPTIONAL TOOL THIS NODE GOES WITHOUT IN THIS RUN — one fact line per
+  // tool, only for the node that declared it, recorded by the host from its
+  // preflight; '' when every tool is there (unavailable-tools.ts; core's
+  // invokeAgent appends the same).
+  const unavailableTools = unavailableToolsBlock(options.nodeName);
+  if (unavailableTools) add('unavailable tools', `\n\n${unavailableTools}`);
 
   // THE RUN'S PROJECT FOLDERS AND THEIR ACCESS — a standing fact for every
   // model node of a run that was handed folders, read from the manifest the
