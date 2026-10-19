@@ -53,6 +53,38 @@ export const RUN_LIMIT_MS_ENV = 'MAX_WORKFLOW_DURATION_MS';
  */
 export const RUN_END_NOTICE_LEAD_MS = 10 * 60_000;
 
+/**
+ * WHAT THE DEADLINE STOPS. The deadline stops a model that is still working;
+ * it does not throw away an answer the model already gave. At the deadline the
+ * engine (graph.ts) stops every model call and starts no new one, but steps
+ * that only RECORD an answer already given — code, no model — may still run
+ * for this long after it, so the answer reaches the run's record.
+ *
+ * Why 2 minutes: on developer run 0288f687 (2026-10-18) the model answered
+ * 19 s before the deadline and the platform needed ~22 s from that answer to
+ * the start of its recording step (node bookkeeping, progress flush); the
+ * recording step itself reads Git with 10 s-capped commands and makes one
+ * platform read. 2 minutes is ~5× that measured path, so a slow box still
+ * makes it, and it stays small against every run limit (25 min default,
+ * 120 min maximum) — no model works in it, so it buys no extra model time.
+ * A person's Stop never waits for it.
+ */
+export const RUN_FINALIZE_GRACE_MS = 2 * 60_000;
+
+/**
+ * When the platform stops the run's PROCESS for good, measured from the
+ * deadline: the finalize grace plus 30 s for the result the engine has by then
+ * to leave the process (the runner hands it to the worker or posts it to the
+ * control plane, then exits). Every backstop that kills or closes a run at its
+ * deadline — the shared worker's timer, the dispatcher's deadline cancel, the
+ * in-container watchdog, the self-host reaper — waits this long past it.
+ * 🔗 TWO-PLACES: backend constants/run-time-limit.js and
+ * packages/egress-tunnel/init.mjs carry the same number (zero-dependency
+ * loaders); selfhosted/__tests__/run-time-limit-contract.test.js fails when
+ * any of the three drifts.
+ */
+export const RUN_HARD_STOP_AFTER_DEADLINE_MS = RUN_FINALIZE_GRACE_MS + 30_000;
+
 export function runDeadline(
   env: any = process.env,
   nowMs: number = Date.now(),

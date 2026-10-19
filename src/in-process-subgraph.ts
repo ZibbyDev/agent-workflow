@@ -833,6 +833,26 @@ export async function runInProcessSubgraph(workflowName, options: any = {}) {
     throw e;
   }
 
+  // The run's deadline ended the child (graph.ts / deadline-stop.ts): it is a
+  // time-out, with whatever the child recorded — including an answer saved
+  // unverified — kept on its record, never reported as completed.
+  if (runResult && typeof runResult === 'object' && runResult.stoppedAtDeadline) {
+    await callFinalize({
+      connection,
+      payload: {
+        childExecutionId,
+        status: 'timeout',
+        finalState,
+        error: { message: String(runResult.error || 'stopped at the run deadline'), code: 'RUN_DEADLINE' },
+        durationMs: Date.now() - startedAt,
+      },
+    });
+    const e: any = new Error(`Sub-graph '${workflowName}' ${runResult.error || 'stopped at the run deadline'}`);
+    e.code = 'RUN_DEADLINE';
+    e.subgraphJobId = childExecutionId;
+    throw e;
+  }
+
   await callFinalize({
     connection,
     payload: {

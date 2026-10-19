@@ -39,6 +39,10 @@ import {
   CHAT_ENTRY_FLAG, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
 } from './chat-entry.js';
 import { chatAttachmentsUnreadable, resolveChatAttachments } from './chat-attachments.js';
+import { runDeadline, RUN_FINALIZE_GRACE_MS } from './run-deadline.js';
+import {
+  startDeadlineClock, deadlineError, eitherSignal, whenAborted, markedUnverified, deadlineStopSentence,
+} from './deadline-stop.js';
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
@@ -1556,8 +1560,12 @@ export class WorkflowGraph {
      * waits for ALL of them (its join degree) before running — once, not once
      * per branch — and re-arms afterwards so a loop can drive it again.
      */
+    // Which node scheduled each one — the deadline's unverified fallback reads
+    // it to find the answer a recording step was given (deadline-stop.ts).
+    const scheduledFrom = new Map<string, string>();
     const schedule = (to, from, viaSimpleEdge) => {
       if (!to || to === 'END') return;
+      if (from) scheduledFrom.set(to, from);
       const degree = joinDegree.get(to) || 0;
       if (viaSimpleEdge && degree > 1 && !backEdges.has(`${from}->${to}`)) {
         const arrived = (arrivals.get(to) || 0) + 1;
@@ -1577,6 +1585,49 @@ export class WorkflowGraph {
     // nodes, conditional retries push that to ~20 worst-case).
     const maxSteps = config?.recursionLimit ?? 100;
     let stepCount = 0;
+
+    // ── The run's deadline (deadline-stop.ts) ───────────────────────────
+    // The deadline the platform declared (run-deadline.ts) stops MODEL work:
+    // every model call gets `modelSignal`, which fires on a person's Stop OR at
+    // the deadline. Code steps keep the person's-Stop signal only, so a step
+    // recording an answer already given may finish within the grace.
+    // `options.deadlineAtMs` / `options.finalizeGraceMs` let an embedder (and
+    // the tests) state them explicitly; otherwise the platform's facts apply.
+    const declaredDeadline = Number.isFinite(options.deadlineAtMs) ? options.deadlineAtMs : (runDeadline()?.atMs ?? null);
+    const deadlineClock = startDeadlineClock(declaredDeadline,
+      Number.isFinite(options.finalizeGraceMs) ? options.finalizeGraceMs : RUN_FINALIZE_GRACE_MS);
+    const modelSignal = eitherSignal(internalAbortController.signal, deadlineClock.reached);
+    const modelCalled = new Set<string>();    // nodes that started (or tried to start) a model call
+    const modelAnswered = new Set<string>();  // nodes whose model call returned an answer
+    let deadlineStoppedModelIn: string | null = null; // a model call the deadline stopped or refused
+    if (deadlineClock.atMs !== null) {
+      deadlineClock.reached.addEventListener('abort', () => {
+        if (!internalAbortController.signal.aborted) timeline.step('Run deadline reached — model work stopped; steps recording its answer may still finish');
+      }, { once: true });
+    }
+    /**
+     * End the run because of its deadline. `unfinished` is a node that did not
+     * finish: when it made no model call and the node that scheduled it had a
+     * model answer, that answer is saved as given under its key, marked
+     * unverified — never an empty result. A model node is never filled in.
+     */
+    const stopAtDeadline = (unfinished: string | null) => {
+      let savedFrom: string | null = null;
+      if (unfinished && !modelCalled.has(unfinished) && state.get(unfinished) === undefined) {
+        const from = scheduledFrom.get(unfinished);
+        if (from && modelAnswered.has(from) && state.get(from) !== undefined) {
+          state.update({ [unfinished]: markedUnverified(state.get(from)) });
+          savedFrom = from;
+        }
+      }
+      const error = deadlineStopSentence(deadlineClock, {
+        stoppedModelIn: deadlineStoppedModelIn,
+        unfinished: savedFrom || !deadlineStoppedModelIn ? unfinished : null,
+        savedFrom,
+      });
+      timeline.step('Workflow stopped at its deadline');
+      return { success: false, error, state: state.getAll(), executionLog, stoppedAtDeadline: true };
+    };
 
     try {
     while (ready.length > 0) {
@@ -1616,6 +1667,8 @@ export class WorkflowGraph {
           stoppedExternally: true,
         };
       }
+      // The grace after the deadline is spent: no further step starts.
+      if (deadlineClock.graceOver.aborted) return stopAtDeadline(currentNode);
 
       const node = this.nodes.get(currentNode);
       if (!node) throw new Error(`Node '${currentNode}' not found in graph`);
@@ -1719,6 +1772,13 @@ export class WorkflowGraph {
       const compactAtTokens = nodeCompactAtTokens(node.config, currentNode);
       const declaredInvokeOpts = compactAtTokens === null ? {} : { [COMPACT_AT_TOKENS]: compactAtTokens };
       const boundInvokeAgent = async (prompt, ctx, opts: any = {}) => {
+        modelCalled.add(currentNode);
+        // Past the deadline no model call starts (a person's Stop keeps its
+        // own path below: the strategy sees the aborted signal).
+        if (deadlineClock.reached.aborted && !internalAbortController.signal.aborted) {
+          deadlineStoppedModelIn = currentNode;
+          throw deadlineError(deadlineClock.atMs as number);
+        }
         // Always inject the engine's internal signal into the strategy
         // options. Node.execute doesn't pass signal itself, so without
         // this slice-3 strategies wouldn't see the engine's abort
@@ -1736,8 +1796,15 @@ export class WorkflowGraph {
           ...opts,                // caller-explicit overrides
           ...(chatCall ? { schema: undefined } : {}),
           ...(attachmentFiles?.images.length ? { images: [...(Array.isArray(opts.images) ? opts.images : []), ...attachmentFiles.images] } : {}),
-          signal: internalAbortController.signal,  // engine always wins
+          // Engine always wins. A person's Stop OR the run's deadline.
+          signal: modelSignal,
         }).finally(() => attachmentFiles?.cleanup());
+        // What the deadline needs to know about this call: it answered, or
+        // the deadline stopped it while it was still working.
+        strategyPromise.then(
+          () => { modelAnswered.add(currentNode); },
+          () => { if (deadlineClock.reached.aborted && !internalAbortController.signal.aborted) deadlineStoppedModelIn = currentNode; },
+        );
         // The reply leaves the moment the model returns — before the node's own
         // bookkeeping and the rest of the run — so the person is not kept
         // waiting on work that is not an answer to them. Awaited, so a run that
@@ -1760,7 +1827,7 @@ export class WorkflowGraph {
 
         // Pre-aborted: skip the race — strategy will see signal.aborted
         // synchronously and reject quickly.
-        if (internalAbortController.signal.aborted) {
+        if (modelSignal.aborted) {
           return deliver(strategyPromise);
         }
         return deliver(Promise.race([
@@ -1777,10 +1844,11 @@ export class WorkflowGraph {
                   `Strategy ignored AbortSignal — engine deadman fired after ${strategyAbortTimeoutMs}ms`,
                 );
                 err.name = 'AbortError';
+                if (deadlineClock.reached.aborted && !internalAbortController.signal.aborted) deadlineStoppedModelIn = currentNode;
                 reject(err);
               }, strategyAbortTimeoutMs);
             };
-            internalAbortController.signal.addEventListener(
+            modelSignal.addEventListener(
               'abort',
               onAbortStartDeadman,
               { once: true },
@@ -1829,7 +1897,8 @@ export class WorkflowGraph {
           // Engine wins on signal: a node may pass its own options through
           // here, but the engine's abort lifecycle is the single source of
           // truth. Strategies read this in slice 3 to plumb into spawn().
-          signal: internalAbortController.signal,
+          // (boundInvokeAgent sets the model signal — Stop or deadline.)
+          signal: modelSignal,
           // …and on WHICH NODE THIS IS, for the same reason. A prompt node gets
           // `nodeName` from node.ts; a CUSTOM-EXECUTE node reaching the model
           // through this wrapper got nothing, so every skill that resolves
@@ -1888,7 +1957,7 @@ export class WorkflowGraph {
         // explicitly. Without this, a hand-rolled in-process dispatch ran the
         // child agent-less (LLM nodes fail) or fell back to the HTTP path.
         let result;
-        result = await withAgentContext(agent, internalAbortController.signal, async () => {
+        const nodeRun: Promise<any> = Promise.resolve(withAgentContext(agent, internalAbortController.signal, async () => {
           if (allMw.length > 0) {
             return this._composeMiddleware(allMw, currentNode, async () => {
               return node.execute(nodeContext, state);
@@ -1899,7 +1968,22 @@ export class WorkflowGraph {
         // line it left by (exec-context nodeId → dispatchSubgraph's
         // `dispatchNodeId` → the child row's `parentNodeId`). Same wrapper as the
         // agent/signal publish: one per-node scope, not two.
-        }, currentNode);
+        }, currentNode));
+        if (deadlineClock.atMs === null) {
+          result = await nodeRun;
+        } else {
+          // A step still running when the grace after the deadline is spent
+          // is not waited for: the run ends with what it has, before the
+          // platform's backstop kills the process (deadline-stop.ts).
+          const GRACE_SPENT = Symbol('grace-spent');
+          nodeRun.catch(() => {});
+          const raced = await Promise.race([nodeRun, whenAborted(deadlineClock.graceOver).then(() => GRACE_SPENT)]);
+          if (raced === GRACE_SPENT) {
+            timeline.nodeStopped(currentNode, { duration: Date.now() - startTime });
+            return stopAtDeadline(currentNode);
+          }
+          result = raced;
+        }
 
         const duration = Date.now() - startTime;
         executionLog.push({ node: currentNode, success: result.success, duration, timestamp: new Date().toISOString() });
@@ -1928,6 +2012,13 @@ export class WorkflowGraph {
               executionLog,
               stoppedExternally: true,
             };
+          }
+          // A step that failed after the deadline — its model call stopped by
+          // it, or a recording step that broke — ends the run as a deadline
+          // stop, keeping the answer it was given (stopAtDeadline).
+          if (deadlineClock.reached.aborted) {
+            timeline.nodeStopped(currentNode, { duration });
+            return stopAtDeadline(currentNode);
           }
 
           state.append('errors', { node: currentNode, error: result.error });
@@ -1985,6 +2076,12 @@ export class WorkflowGraph {
           schedule(edge, currentNode, true);
         }
       } catch (error) {
+        // Thrown past the deadline (not on a person's Stop): same ending as a
+        // step that failed past it — the answer it was given is kept.
+        if (deadlineClock.reached.aborted && !internalAbortController.signal.aborted) {
+          if (timeline.isInsideNode) timeline.nodeStopped(currentNode, { duration: Date.now() - startTime });
+          return stopAtDeadline(currentNode);
+        }
         if (timeline.isInsideNode) {
           timeline.nodeFailed(currentNode, error.message, { duration: Date.now() - startTime });
         }
@@ -1994,6 +2091,11 @@ export class WorkflowGraph {
       }
     }
 
+    // Every step finished, but a model the deadline stopped (whose node then
+    // carried on with its own fallback) means the run did not complete its
+    // work: it ends as a deadline stop, with everything its steps recorded.
+    if (deadlineStoppedModelIn) return stopAtDeadline(null);
+
     timeline.graphComplete();
     const result: any = { success: true, state: state.getAll(), executionLog };
     if (chatTurn) result.chatReplies = chatReplies;
@@ -2002,6 +2104,7 @@ export class WorkflowGraph {
     }
     return result;
     } finally {
+      deadlineClock.dispose();
       // Cleanup runs once on EVERY exit path: success, regular failure,
       // unexpected throw, recursion-limit, Studio stop. Previously cleanup
       // only fired inside Studio-stop branches, so successful and failed
