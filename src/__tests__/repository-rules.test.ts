@@ -821,3 +821,41 @@ describe('the folders block names the folder whose files are beneath each direct
     expect(preparedWorkspaces(env).map((w) => w.originalPath)).toEqual(['/Users/example/app', '/Users/example/app/backend']);
   });
 });
+
+// An entry the runner lists only for CHOOSING (`status: "selectable"`): a
+// repository inside a project folder that holds several. It is not prepared in
+// the run and has no files at its `directory`.
+// [A/B] before, the block said it was a prepared, editable folder at that directory.
+describe('an entry listed only for choosing is said as such, never as a prepared folder', () => {
+  const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [
+    { directory: '/workspace/local-project/tree/app', originalPath: '/Users/example/app', status: 'ready', access: 'editable', isPrimary: true },
+    { directory: '/workspace/local-project/id-lib', originalPath: '/Users/example/packages/lib', status: 'selectable', kind: 'catalog', access: 'editable' },
+  ] }) };
+  it('the block states it as listed for choosing, with no prepared path', () => {
+    const block = preparedFoldersBlock(env);
+    expect(block).toContain('- /Users/example/app → /workspace/local-project/tree/app (editable)');
+    expect(block).toContain('- /Users/example/packages/lib (listed for choosing; not prepared in this run, no files here)');
+    expect(block).not.toContain('/workspace/local-project/id-lib');
+  });
+  it('the manifest reader marks it; it is not one of the run\'s folder directories', () => {
+    expect(preparedWorkspaces(env).map((w) => w.selectable === true)).toEqual([false, true]);
+    expect(preparedProjectFolders(env)).toEqual(['/workspace/local-project/tree/app']);
+  });
+  it('unmarked, the primary folder is the first that has files', () => {
+    const unmarked = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [
+      { directory: '/workspace/local-project/id-lib', originalPath: '/Users/example/packages/lib', status: 'selectable' },
+      { directory: '/workspace/local-project/tree/app', originalPath: '/Users/example/app', status: 'ready' },
+    ] }) };
+    expect(preparedWorkspaces(unmarked).map((w) => w.primary)).toEqual([false, true]);
+  });
+  it('control: ready and pending folders read exactly as before', () => {
+    const plain = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [
+      { directory: '/workspace/local-project/tree/app', originalPath: '/Users/example/app', status: 'ready', access: 'read-only' },
+      { directory: '/workspace/local-project/tree/web', originalPath: '/Users/example/web', status: 'pending' },
+    ] }) };
+    const block = preparedFoldersBlock(plain);
+    expect(block).toContain('- /Users/example/app → /workspace/local-project/tree/app (read-only)');
+    expect(block).toContain('- /Users/example/web → /workspace/local-project/tree/web (editable; not prepared yet)');
+    expect(preparedWorkspaces(plain).map((w) => w.primary)).toEqual([true, false]);
+  });
+});
