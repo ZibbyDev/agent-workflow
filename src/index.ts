@@ -113,6 +113,9 @@ export { registerStrategy, listStrategies, getAgentStrategy, prepareAgentStrateg
 // Repository rules — the rule files a repository's owner keeps in it, delivered
 // to every model node the same way whatever its vendor (repository-rules.ts).
 export { RUN_DEADLINE_ENV, RUN_LIMIT_MS_ENV, RUN_END_NOTICE_LEAD_MS, RUN_FINALIZE_GRACE_MS, RUN_HARD_STOP_AFTER_DEADLINE_MS, runDeadline, clockTime, runDeadlineSentence, runEndNotice, singleCommandCapMs } from './run-deadline.js';
+// The fact a run the deadline ended carries in its state (deadline-stop.ts).
+export { DEADLINE_STOP_KEY } from './deadline-stop.js';
+export type { DeadlineStopFact } from './deadline-stop.js';
 export { COMPACT_AT_TOKENS, nodeCompactAtTokens } from './session-compaction.js';
 export { registerPersonAnswerTool, personAnswerTool, UNANSWERED_TEXT_MAX_CHARS, UNANSWERED_MAX_LINES, recordPersonLine, markPersonLineAnswered, markPersonLineNoted, unansweredPersonLines, clearPersonLines, unansweredLineFact, unansweredLinesBlock, unansweredLineNote } from './unanswered-lines.js';
 export { UNAVAILABLE_REASON_MAX_CHARS, recordUnavailableTools, clearUnavailableTools, unavailableToolsFor, unavailableToolFact, unavailableToolsBlock } from './unavailable-tools.js';

@@ -41,7 +41,7 @@ import {
 import { chatAttachmentsUnreadable, resolveChatAttachments } from './chat-attachments.js';
 import { runDeadline, RUN_FINALIZE_GRACE_MS } from './run-deadline.js';
 import {
-  startDeadlineClock, deadlineError, eitherSignal, whenAborted, markedUnverified, deadlineStopSentence,
+  startDeadlineClock, deadlineError, eitherSignal, whenAborted, deadlineStopSentence, deadlineStopFact, DEADLINE_STOP_KEY,
 } from './deadline-stop.js';
 
 // ── Session helpers ────────────────────────────────────────────────────────
@@ -1348,6 +1348,19 @@ export class WorkflowGraph {
         );
       }
     }
+    // THE SIGNAL A STEP'S CODE RECEIVES (`state._signal`, the exec-context
+    // signal its tools, child processes and in-process sub-graphs read). It
+    // fires on a person's Stop — forwarded from the internal controller, so
+    // that Stop reaches a running step at once, exactly as before — and ALSO
+    // when the grace after the run's deadline is spent (wired below, where the
+    // deadline clock starts). Without the second feed a step the run had
+    // already reported as stopped kept running and writing behind it.
+    // `internalAbortController` itself stays "a person's Stop" only: the
+    // deadline paths below tell the two apart by it.
+    const stepAbortController = new AbortController();
+    const abortSteps = (reason?: any) => { if (!stepAbortController.signal.aborted) stepAbortController.abort(reason); };
+    if (internalAbortController.signal.aborted) abortSteps(internalAbortController.signal.reason);
+    else internalAbortController.signal.addEventListener('abort', () => abortSteps(internalAbortController.signal.reason), { once: true });
 
     // Engine-level deadman timeout (slice 4). Default 5s. Configurable via
     // options.strategyAbortTimeoutMs OR config.strategyAbortTimeoutMs (so
@@ -1490,8 +1503,9 @@ export class WorkflowGraph {
       resolvedTools: this.resolvedToolsMap || {},
       // Custom-execute nodes (and slice 3 strategies, once they adopt) read
       // _signal off state to know whether to bail early. Stable contract:
-      // an AbortSignal — never null when run() is invoked.
-      _signal: internalAbortController.signal,
+      // an AbortSignal — never null when run() is invoked. A person's Stop,
+      // or the end of the grace after the run's deadline (stepAbortController).
+      _signal: stepAbortController.signal,
     });
 
     // Resolve skill middleware: scan all nodes for unique skills,
@@ -1589,13 +1603,19 @@ export class WorkflowGraph {
     // ── The run's deadline (deadline-stop.ts) ───────────────────────────
     // The deadline the platform declared (run-deadline.ts) stops MODEL work:
     // every model call gets `modelSignal`, which fires on a person's Stop OR at
-    // the deadline. Code steps keep the person's-Stop signal only, so a step
-    // recording an answer already given may finish within the grace.
+    // the deadline. Code steps get `stepAbortController.signal`, which fires on
+    // a person's Stop OR when the grace after the deadline is spent — so a step
+    // recording an answer already given may finish within the grace, and one
+    // still running when it is spent is told to stop (its tools and child
+    // processes see the same signal) instead of running on behind a run that
+    // has already reported that it stopped.
     // `options.deadlineAtMs` / `options.finalizeGraceMs` let an embedder (and
     // the tests) state them explicitly; otherwise the platform's facts apply.
     const declaredDeadline = Number.isFinite(options.deadlineAtMs) ? options.deadlineAtMs : (runDeadline()?.atMs ?? null);
     const deadlineClock = startDeadlineClock(declaredDeadline,
       Number.isFinite(options.finalizeGraceMs) ? options.finalizeGraceMs : RUN_FINALIZE_GRACE_MS);
+    if (deadlineClock.graceOver.aborted) abortSteps(deadlineClock.graceOver.reason);
+    else deadlineClock.graceOver.addEventListener('abort', () => abortSteps(deadlineClock.graceOver.reason), { once: true });
     const modelSignal = eitherSignal(internalAbortController.signal, deadlineClock.reached);
     const modelCalled = new Set<string>();    // nodes that started (or tried to start) a model call
     const modelAnswered = new Set<string>();  // nodes whose model call returned an answer
@@ -1606,27 +1626,32 @@ export class WorkflowGraph {
       }, { once: true });
     }
     /**
-     * End the run because of its deadline. `unfinished` is a node that did not
-     * finish: when it made no model call and the node that scheduled it had a
-     * model answer, that answer is saved as given under its key, marked
-     * unverified — never an empty result. A model node is never filled in.
+     * End the run because of its deadline, and record WHY as a fact on the
+     * run (deadline-stop.ts `deadlineStopFact`): which model the deadline
+     * stopped, which step did not finish, and — when that step made no model
+     * call and the node that scheduled it had a model answer — which node
+     * answered. That answer stays where it already is, under the node that
+     * produced it; no step's result is ever written or inferred for a step
+     * that did not finish (its key stays absent). The fact is written into the
+     * run's state under DEADLINE_STOP_KEY, beside the engine's other run facts
+     * (`errors`, `failed`, `failedAt`), so it reaches the run's record with
+     * the state on every runner, and is also returned on the result.
      */
     const stopAtDeadline = (unfinished: string | null) => {
-      let savedFrom: string | null = null;
+      let answeredBy: string | null = null;
       if (unfinished && !modelCalled.has(unfinished) && state.get(unfinished) === undefined) {
         const from = scheduledFrom.get(unfinished);
-        if (from && modelAnswered.has(from) && state.get(from) !== undefined) {
-          state.update({ [unfinished]: markedUnverified(state.get(from)) });
-          savedFrom = from;
-        }
+        if (from && modelAnswered.has(from) && state.get(from) !== undefined) answeredBy = from;
       }
+      const fact = deadlineStopFact(deadlineClock, { stoppedModelIn: deadlineStoppedModelIn, unfinished, answeredBy });
       const error = deadlineStopSentence(deadlineClock, {
         stoppedModelIn: deadlineStoppedModelIn,
-        unfinished: savedFrom || !deadlineStoppedModelIn ? unfinished : null,
-        savedFrom,
+        unfinished: answeredBy || !deadlineStoppedModelIn ? unfinished : null,
+        answeredBy,
       });
+      state.set(DEADLINE_STOP_KEY, fact);
       timeline.step('Workflow stopped at its deadline');
-      return { success: false, error, state: state.getAll(), executionLog, stoppedAtDeadline: true };
+      return { success: false, error, state: state.getAll(), executionLog, stoppedAtDeadline: true, deadlineStop: fact };
     };
 
     try {
@@ -1957,7 +1982,7 @@ export class WorkflowGraph {
         // explicitly. Without this, a hand-rolled in-process dispatch ran the
         // child agent-less (LLM nodes fail) or fell back to the HTTP path.
         let result;
-        const nodeRun: Promise<any> = Promise.resolve(withAgentContext(agent, internalAbortController.signal, async () => {
+        const nodeRun: Promise<any> = Promise.resolve(withAgentContext(agent, stepAbortController.signal, async () => {
           if (allMw.length > 0) {
             return this._composeMiddleware(allMw, currentNode, async () => {
               return node.execute(nodeContext, state);
