@@ -589,6 +589,29 @@ describe('the run\'s project folders and their access — a standing fact for ev
     expect(preparedFoldersBlock(four)).toContain('Paths outside these folders are unavailable here. ');
   });
 
+  // run_log/magnum/2026-10-20-folder-files-outside-checkout-dropped: every
+  // folder is also shown as it is on disk, beside where the run works. A/B:
+  // before, the block named only the run directory.
+  it('each folder names where the run works AND where the person\'s folder is as it is on disk now, with what is not in the commit', () => {
+    const live = manifest([
+      { originalPath: '/Users/example/bifang/mockup', folderPath: '/Users/example/bifang/mockup', directory: '/workspace/local-project/tree/mockup', isPrimary: true,
+        access: 'editable', liveDirectory: '/workspace/local-project/live/mockup', uncommittedOnDisk: { count: 2, paths: [], truncated: false } },
+      { originalPath: '/Users/example/bifang', folderPath: '/Users/example/bifang', directory: '/workspace/local-project/tree', access: 'editable',
+        inPlace: true, liveDirectory: '/workspace/local-project/live' },
+      { originalPath: '/Users/example/backend', folderPath: '/Users/example/backend', directory: '/workspace/local-project/tree/backend', access: 'read-only',
+        liveDirectory: '/workspace/local-project/live/backend', uncommittedOnDisk: { notKnown: 'took too long' } },
+    ]);
+    const block = preparedFoldersBlock(live);
+    expect(block).toContain('- /Users/example/bifang/mockup → /workspace/local-project/tree/mockup (editable); as it is on disk now: /workspace/local-project/live/mockup (editable; 2 files there not in the commit this run works from)');
+    expect(block).toContain('- /Users/example/bifang → /workspace/local-project/tree (editable; the folder itself, in no Git repository: no commit); as it is on disk now: /workspace/local-project/live (editable)');
+    expect(block).toContain('- /Users/example/backend → /workspace/local-project/tree/backend (read-only); as it is on disk now: /workspace/local-project/live/backend (read-only; files not in the commit: not known (took too long))');
+    expect(block).toMatch(/may be another person's unfinished edits; it can change while it is read; in a read-only folder, secret files \(\.env\) read as empty/);
+    expect(block).toMatch(/Saved work is built from the folder's run directory, not from it/);
+    expect(block).not.toMatch(/\b(you must|do not|never|always|should|manager|developer|ask the)\b/i);
+    // A manifest with no live view gives exactly the block it gave before.
+    expect(preparedFoldersBlock(four)).not.toContain('as it is on disk now');
+  });
+
   it('no prepared folder, no claim: a run without folders gets no block', () => {
     expect(preparedFoldersBlock({})).toBe('');
     expect(preparedFoldersBlock({ LOCAL_PROJECT_CONTEXT: 'invalid' })).toBe('');

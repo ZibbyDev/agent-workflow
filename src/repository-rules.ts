@@ -590,6 +590,15 @@ export interface PreparedWorkspace {
    * has no files at `directory`.
    */
   selectable?: boolean;
+  /**
+   * Where the person's folder is in this run AS IT IS ON DISK NOW, with the
+   * folder's access (`liveDirectory`; selfhosted live-view.js). Absent when the runner gave none.
+   */
+  liveDirectory?: string;
+  /** The run's directory IS the person's folder (a folder in no Git repository): no commit. */
+  inPlace?: boolean;
+  /** How many files the person's checkout held on disk and not in the commit `directory` was cut from, when it was cut; or why that is not known. */
+  uncommitted?: { count: number } | { notKnown: string };
 }
 
 /**
@@ -617,6 +626,11 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
       folderPath: abs(w.folderPath) && normalize(w.folderPath) === w.folderPath ? w.folderPath : '',
       marked: w.isPrimary === true,
       access: w.access === 'read-only' ? 'read-only' : 'editable',
+      ...(abs(w.liveDirectory) && normalize(w.liveDirectory) === w.liveDirectory ? { liveDirectory: w.liveDirectory } : {}),
+      ...(w.inPlace === true ? { inPlace: true } : {}),
+      ...(w.uncommittedOnDisk && Number.isSafeInteger(w.uncommittedOnDisk.count) && w.uncommittedOnDisk.count >= 0
+        ? { uncommitted: { count: w.uncommittedOnDisk.count } }
+        : w.uncommittedOnDisk && typeof w.uncommittedOnDisk.notKnown === 'string' ? { uncommitted: { notKnown: w.uncommittedOnDisk.notKnown.slice(0, 80) } } : {}),
       ancestorRuleFiles: (Array.isArray(w.ancestorRuleFiles) ? w.ancestorRuleFiles : []).filter(abs).slice(0, MAX_ANCESTOR_FILES),
     }))
     .filter((w: any) => abs(w.directory))
@@ -678,9 +692,13 @@ export function preparedFoldersBlock(env: Record<string, string | undefined> = p
     // An entry listed only for choosing has no folder in this run: it is said
     // as what it is, never as a prepared path (it used to read as "prepared,
     // editable" at a directory that holds no files).
-    ...folders.map((w) => w.selectable
+    ...folders.map((w) => (w.selectable
       ? `- ${w.folderPath || w.originalPath} (listed for choosing; not prepared in this run, no files here)`
-      : `- ${w.folderPath || w.originalPath} → ${w.directory} (${w.access}${w.pending ? '; not prepared yet' : ''})`),
+      : `- ${w.folderPath || w.originalPath} → ${w.directory} (${w.access}${w.pending ? '; not prepared yet' : ''}${w.inPlace ? '; the folder itself, in no Git repository: no commit' : ''})`)
+      + (w.liveDirectory ? `; as it is on disk now: ${w.liveDirectory} (${w.access}${w.uncommitted
+        ? ('count' in w.uncommitted ? `; ${w.uncommitted.count} file${w.uncommitted.count === 1 ? '' : 's'} there not in the commit this run works from`
+          : `; files not in the commit: not known (${w.uncommitted.notKnown})`) : ''})` : '')),
+    ...(folders.some((w) => w.liveDirectory) ? ['A folder\'s "as it is on disk now" directory is the person\'s folder itself, in this same container, with the folder\'s access: it includes files that are not in the commit this run works from, which may be another person\'s unfinished edits; it can change while it is read; in a read-only folder, secret files (.env) read as empty. Saved work is built from the folder\'s run directory, not from it; a file needed from it can be copied across with ordinary shell tools.'] : []),
     ...(folders.some(w => w.pending) ? ['For a folder marked not prepared yet, call prepare_workspaces only when you need its files, using its id from list_workspaces. The tool returns ready paths and repository instructions; then use your native file and command tools there. A conversation that needs no files needs no preparation.'] : []),
     ...(outside.length ? [
       'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',
