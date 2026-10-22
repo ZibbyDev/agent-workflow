@@ -314,11 +314,9 @@ You're not replacing the agent. You're giving it a job description, a contract, 
 
 | Package | What it adds |
 |---|---|
-| [`@zibby/cli`](https://www.npmjs.com/package/@zibby/cli) | `zibby` command — scaffold, dev server, deploy, trigger, logs. |
-| [`@zibby/core`](https://www.npmjs.com/package/@zibby/core) | Built-in agent strategies (Claude / Codex / Gemini / OpenAI Assistant), MCP client, runtime. |
 | [`@zibby/skills`](https://www.npmjs.com/package/@zibby/skills) | Pre-built skills (browser via Playwright MCP, GitHub, Jira, Slack, memory). |
 
-Workflow itself ships **zero agent strategies and zero skills** — bring your own, or `npm install @zibby/core @zibby/skills` for the batteries-included experience.
+Workflow itself ships **zero agent strategies and zero skills** — bring your own, or `npm install @zibby/skills` for pre-built skills.
 
 ---
 
