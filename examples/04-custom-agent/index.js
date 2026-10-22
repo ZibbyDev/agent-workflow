@@ -3,14 +3,14 @@
  *
  * Implement AgentStrategy on top of *anything*. This example uses
  * `fetch` against the OpenAI Chat Completions API directly — no SDK,
- * no @zibby/core dependency.
+ * no extra dependency.
  *
  * Requires OPENAI_API_KEY in the environment.
  *
  * Run: `OPENAI_API_KEY=... node index.js`
  */
 
-import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 class OpenAIChatStrategy extends AgentStrategy {
@@ -69,5 +69,9 @@ const graph = new Graph()
   })
   .setEntryPoint('write');
 
-const { state } = await graph.run(null, { agentType: 'openai' });
+const { state } = await graph.run(null, {
+  agentType: 'openai',
+  // The model each node runs on; the strategy receives it as `options.model`.
+  config: { models: { default: 'gpt-4o-mini' } },
+});
 console.log('\n→\n' + state.write.haiku + '\n');

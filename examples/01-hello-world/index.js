@@ -5,7 +5,7 @@
  * Run: `node index.js`
  */
 
-import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 // ── 1. Bring your own agent ──────────────────────────────────────────────
@@ -28,6 +28,10 @@ const graph = new Graph()
   .setEntryPoint('say_hi');
 
 // ── 3. Run ──────────────────────────────────────────────────────────────
-const { state } = await graph.run(null, { agentType: 'fake' });
+const { state } = await graph.run(null, {
+  agentType: 'fake',
+  // Every node runs on a model the run names: one per node id, or one default.
+  config: { models: { default: 'echo-1' } },
+});
 
 console.log('\n→', state.say_hi.greeting);

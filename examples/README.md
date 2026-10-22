@@ -20,15 +20,3 @@ node index.js
 
 Examples 01–03 and 05 use a fake agent — no API key required, runs anywhere.
 Example 04 needs `OPENAI_API_KEY`.
-
-## Want the full developer experience?
-
-These show the library directly. For scaffolding, a dev server, deploy, and remote runs:
-
-```bash
-npx @zibby/cli init        # scaffold .zibby/graph.mjs
-npx @zibby/cli start <name> # local dev server
-npx @zibby/cli deploy       # ship to Zibby Cloud
-npx @zibby/cli trigger      # run it
-npx @zibby/cli logs -t      # tail logs
-```

@@ -1,5 +1,5 @@
 {
-  "name": "zibby-workflow-example-with-skills",
+  "name": "agent-workflow-example-with-skills",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,7 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@zibby/workflow": "^0.1.1",
+    "@zibby/agent-workflow": "^2.0.28",
     "zod": "^3.23.0"
   }
 }

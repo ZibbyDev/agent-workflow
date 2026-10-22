@@ -8,7 +8,7 @@
  * Run: `node index.js`
  */
 
-import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 // A scripted agent: returns canned structured output per node, so we can
@@ -47,7 +47,10 @@ const graph = new Graph()
   .addEdge('execute', 'report')
   .setEntryPoint('plan');
 
-const { state } = await graph.run(null, { agentType: 'scripted' });
+const { state } = await graph.run(null, {
+  agentType: 'scripted',
+  config: { models: { default: 'scripted-1' } },
+});
 
 console.log('\n--- pipeline result ---');
 console.log('plan.tasks       :', state.plan.tasks);

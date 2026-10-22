@@ -9,20 +9,20 @@
  * Run: `node index.js --reject`  — review rejects, loops back
  */
 
-import { Graph, AgentStrategy, registerStrategy } from '@zibby/workflow';
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 const reject = process.argv.includes('--reject');
 
 class ScriptedAgent extends AgentStrategy {
-  constructor() { super('scripted', 'Scripted agent for routing demo'); }
+  constructor() { super('scripted', 'Scripted agent for routing demo'); this.drafts = 0; }
   canHandle() { return true; }
-  async invoke(_prompt, { nodeName, state }) {
-    const attempts = state?.attempts ?? 0;
+  async invoke(_prompt, { nodeName }) {
+    if (nodeName === 'draft') this.drafts += 1;
     const responses = {
-      draft:  { content: `Draft v${attempts + 1}`, attempts: attempts + 1 },
-      // First attempt fails when --reject is set, then approves on retry.
-      review: { approved: !reject || attempts >= 2 },
+      draft:  { content: `Draft v${this.drafts}`, attempts: this.drafts },
+      // First review rejects when --reject is set, then approves on the retry.
+      review: { approved: !reject || this.drafts >= 2 },
       ship:   { url: 'https://example.com/published' },
     };
     const structured = responses[nodeName];
@@ -48,7 +48,10 @@ const graph = new Graph()
   )
   .setEntryPoint('draft');
 
-const { state, executionLog } = await graph.run(null, { agentType: 'scripted' });
+const { state, executionLog } = await graph.run(null, {
+  agentType: 'scripted',
+  config: { models: { default: 'scripted-1' } },
+});
 
 console.log('\n--- routing path ---');
 executionLog.forEach((step, i) => console.log(`${i + 1}. ${step.node}`));

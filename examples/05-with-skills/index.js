@@ -17,7 +17,7 @@ import {
   registerStrategy,
   registerSkill,
   resolveNodeTools,
-} from '@zibby/workflow';
+} from '@zibby/agent-workflow';
 import { z } from 'zod';
 
 // 1. Register a skill. In production this would point at a real MCP server
@@ -84,7 +84,10 @@ agent.invoke = async (prompt, opts) => {
   return origInvoke(prompt, opts);
 };
 
-const { state } = await graph.run(null, { agentType: 'introspect' });
+const { state } = await graph.run(null, {
+  agentType: 'introspect',
+  config: { models: { default: 'introspect-1' } },
+});
 
 console.log('\n--- skill scoping ---');
 console.log('with_browser.tools   :', state.with_browser.tools);
