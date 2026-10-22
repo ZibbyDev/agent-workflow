@@ -1,13 +1,11 @@
 /**
  * THE DEADLINE INSIDE ONE graph.run — what it stops, and what it keeps.
  *
- * WHY THIS EXISTS. Developer run 0288f687 (ticket 754, 2026-10-18): the model
- * answered 9 s before the run's deadline; the code step that records the
- * answer started a few seconds after it, the process was killed at the
- * deadline, and the run's whole structured result was recorded as `{}`. A
- * 90-minute run lost its result and its manager had to dispatch another run
- * only to register work that was already committed
- * (run_log/developer/2026-10-19-result-lost-at-run-deadline/).
+ * WHY THIS EXISTS. A model answered seconds before its run's deadline; the
+ * code step that records the answer started a few seconds after it, the
+ * process was killed at the deadline, and the run's whole structured result
+ * was recorded as `{}`. A long run lost its result and its caller had to start
+ * another run only to register work that was already done.
  *
  * The rule, for every agent:
  *   • At the deadline every model call is stopped and no new one is started —
@@ -23,11 +21,9 @@
  *     where it is, under that node — and that nothing checked it
  *     (`unverified`). No result is ever written or inferred for a step that
  *     did not finish: guessing a successor's result from its predecessor's
- *     answer put `{approved:true}` on a `publish` step (Codex review of
- *     9eff439). A reader that wants the member's answer reads this fact
- *     (board-runner lib/recorded-output.js) and treats it as unverified, the
- *     platform-owned mark readers already honour (developer
- *     lib/work-result.js, board-runner recorded-candidate.js).
+ *     answer put `{approved:true}` on a `publish` step. A reader that wants
+ *     the step's answer reads this fact and treats it as unverified, the
+ *     mark readers already honour.
  *   • Within the grace no step's code is told to stop: it may finish recording.
  *   • A person's Stop (the run's abort signal) is not this: it stops at once
  *     and never waits for the grace.

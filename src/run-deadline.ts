@@ -77,7 +77,7 @@ export const RUN_FINALIZE_GRACE_MS = 2 * 60_000;
  * to leave the process (the runner hands it to the worker or posts it to the
  * control plane, then exits). Every backstop that kills or closes a run at its
  * deadline — the shared worker's timer, the dispatcher's deadline cancel, the
- * in-container watchdog, the self-host reaper — waits this long past it.
+ * in-container watchdog, the host's reaper — waits this long past it.
  * 🔗 TWO-PLACES: backend constants/run-time-limit.js and
  * packages/egress-tunnel/init.mjs carry the same number (zero-dependency
  * loaders); selfhosted/__tests__/run-time-limit-contract.test.js fails when
