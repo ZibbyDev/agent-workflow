@@ -7,7 +7,7 @@
 
 [Deutsch](./i18n/README.de.md) | [Español](./i18n/README.es.md) | [français](./i18n/README.fr.md) | [日本語](./i18n/README.ja.md) | [한국어](./i18n/README.ko.md) | [Português](./i18n/README.pt.md) | [Русский](./i18n/README.ru.md) | [中文](./i18n/README.zh.md)
 
-📖 **Full docs:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [Designing agents](https://docs.zibby.app/concepts/designing-agents) · [CLI Reference](https://docs.zibby.app/cli-reference) · [Cloud](https://docs.zibby.app/cloud/triggering)
+📖 **Full docs:** [docs.zibby.app](https://docs.zibby.app) · [Get Started](https://docs.zibby.app/get-started/install) · [Concepts](https://docs.zibby.app/concepts/graph) · [Designing agents](https://docs.zibby.app/concepts/designing-agents) · [Cloud](https://docs.zibby.app/cloud/triggering)
 
 > **The cloud pipeline for Claude Code, Codex, and Gemini.** Compose them into structured workflows with Zod-validated handoff between nodes. Vendor-neutral, JavaScript-first, runs locally or in our cloud.
 
@@ -31,42 +31,65 @@ graph
   .addNode('verify',    { prompt, outputSchema: Result, agent: 'gemini' });
 ```
 
-Each agent reads its own credential env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** you can set those per-workflow — different keys per pipeline, no global state — see [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Per-node `model` overrides come from `.zibby.config.mjs` (`models: { node_id: 'claude-opus-4.6' }`), which the CLI ships to cloud as part of the deploy bundle.
+Each agent reads its own credential env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). In **Zibby Cloud** you can set those per-workflow — different keys per pipeline, no global state — see [Per-workflow env vars](https://docs.zibby.app/cloud/env-vars). Each node runs on the model the run config names for it (`config: { models: { node_id: 'claude-opus-4.6', default: '…' } }`); a node never borrows another node's model.
 
 ---
 
 ## ⚡ Try it in 60 seconds
 
-A complete loop — generate, run locally, deploy to cloud, trigger remotely, watch logs. No global install needed:
-
-No setup step. The first command bootstraps `.zibby/workflows/` for you.
-
 ```bash
-# 1. Generate a workflow — creates .zibby/workflows/my-pipeline/ + graph.mjs
-npx @zibby/cli agent new my-pipeline
-
-# 2. Run it locally — names are folder names, not cloud identifiers
-npx @zibby/cli agent start my-pipeline
-
-# 3. Ship it to Zibby Cloud (returns a UUID + caches it in .zibby-deploy.json)
-npx @zibby/cli login
-npx @zibby/cli agent deploy my-pipeline
-
-# 4. Trigger a remote run by UUID. Tail the logs Heroku-style.
-npx @zibby/cli agent trigger <uuid>     # uuid printed by `deploy` or `agent list`
-npx @zibby/cli agent logs -t
-
-# 5. Manage the fleet
-npx @zibby/cli agent list               # local + deployed (shows UUIDs)
-npx @zibby/cli agent delete <uuid>      # tear one down
+npm install @zibby/agent-workflow zod
 ```
 
-Prefer to install once instead of `npx` every time:
+Save this as `index.mjs` and run `node index.mjs`. It uses a stand-in agent with canned answers, so it runs offline with no API key:
 
-```bash
-npm install -g @zibby/cli
-zibby --help
+```js
+import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
+import { z } from 'zod';
+
+// 1. Bring your own agent. A real one calls Claude Code, Codex, an API…
+//    This one returns canned output per node so you can run it offline.
+class EchoAgent extends AgentStrategy {
+  constructor() { super('echo', 'Canned answers for the quickstart'); }
+  canHandle() { return true; }
+  async invoke(prompt, { nodeName }) {
+    const answers = {
+      plan:   { tasks: ['Add a theme setting', 'Add the toggle', 'Test both themes'] },
+      finish: { summary: `Echo of: ${prompt}` },
+    };
+    const structured = answers[nodeName];
+    return { raw: JSON.stringify(structured), structured };
+  }
+}
+registerStrategy(new EchoAgent());
+
+// 2. Declare the graph: each node has a prompt and a Zod output schema.
+const Plan = z.object({ tasks: z.array(z.string()) });
+const Done = z.object({ summary: z.string() });
+
+const graph = new Graph()
+  .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
+  .addNode('finish', {
+    prompt: (state) => `Summarise: ${state.plan.tasks.join(', ')}`,
+    outputSchema: Done,
+  })
+  .addEdge('plan', 'finish')
+  .setEntryPoint('plan');
+
+// 3. Run it. Each node's output lands in state under the node's name.
+const { state } = await graph.run(null, {
+  goal: 'add a dark-mode toggle',
+  agentType: 'echo',
+  config: { models: { default: 'echo-1' } },  // a model per node id, or one default
+});
+
+console.log(state.plan.tasks);      // [ 'Add a theme setting', 'Add the toggle', 'Test both themes' ]
+console.log(state.finish.summary);  // Echo of: Summarise: Add a theme setting, …
 ```
+
+To use a real coding agent, replace `EchoAgent` with an `AgentStrategy` whose `invoke` calls it and returns `{ raw, structured }` — see [`examples/04-custom-agent`](./examples/04-custom-agent/). Every run writes a session folder under `.zibby/output/sessions/<id>/` that you can inspect afterwards.
+
+See [`examples/`](./examples/) for runnable demos of each pattern.
 
 ---
 
@@ -79,72 +102,6 @@ curl -fsSL https://dl.zibby.app/selfhosted/latest/install.sh | bash
 ```
 
 Requirements: Docker + ~8 GB RAM. The installer downloads the release bundle, `docker load`s the images locally (**no registry login needed**), generates secrets, brings the stack up, and prints your dashboard URL + access token. Free tier: up to 10 deployed agents.
-
----
-
-## The CLI: full workflow lifecycle
-
-All workflow operations live under `zibby agent <verb>` for consistency. The bare top-level forms (`zibby start`, `zibby deploy`, `zibby trigger`, `zibby logs`) are kept as backward-compat aliases.
-
-| Command | What it does |
-|---|---|
-| `zibby agent new <name>` | **Generate** a new custom workflow under `.zibby/workflows/<name>/`. Auto-creates `.zibby/` if missing — no separate init step required. |
-| `zibby agent start <name>` | Run a workflow **locally** with hot-reload (defaults to port 3848). Name = folder under `.zibby/workflows/`. |
-| `zibby login` / `logout` / `status` | Cloud auth. |
-| `zibby agent deploy [name]` | **Deploy** a workflow to Zibby Cloud (interactive picker if name omitted). |
-| `zibby agent trigger <uuid>` | **Run** a deployed workflow in the cloud. UUID is canonical (names are local-only). Get UUIDs from `agent list` or the `deploy` output. |
-| `zibby agent logs [jobId] -t` | Tail **logs** from a run, Heroku-style. `-t` to follow live. |
-| `zibby agent list` | **List** local + deployed workflows. |
-| `zibby agent download <uuid>` | **Pull** a deployed workflow back to local — edit + redeploy. |
-| `zibby agent delete <uuid>` | **Delete** a deployed workflow. |
-
-**Local** runs land in `.zibby/output/sessions/<id>/` with raw outputs, parsed JSON, and a JSONL execution log — replay-friendly. **Cloud** runs use the same on-disk format, fronted by the trigger/logs commands.
-
-**Local vs cloud identity**: workflow folder names (`my-pipeline`) are *local* — used by `agent new`, `agent start`, `agent deploy`. Cloud workflows are identified by **UUID** — used by `agent trigger`, `agent logs`, `agent download`, `agent delete`. After your first `deploy`, the UUID is cached in `.zibby/workflows/<name>/.zibby-deploy.json` (commit it to git so collaborators share the same canonical reference).
-
-> 📋 **Full CLI cheat sheet** including `zibby init`, `zibby template list/add`, `zibby memory remote/cost/pull/push` (UI agent memory + team sync), and `zibby test` is in [`@zibby/cli`'s README](https://www.npmjs.com/package/@zibby/cli). Workflow commands above are the engine-relevant subset.
-
----
-
-## Use as a library
-
-If you don't want the CLI, drop into JavaScript directly:
-
-```bash
-npm install @zibby/agent-workflow
-```
-
-```js
-import { Graph, AgentStrategy, registerStrategy } from '@zibby/agent-workflow';
-import { z } from 'zod';
-
-class MyAgent extends AgentStrategy {
-  constructor() { super('mine', 'demo'); }
-  canHandle() { return true; }
-  async invoke(prompt, { schema }) {
-    return { raw: '...', structured: { summary: 'hello' } };
-  }
-}
-registerStrategy(new MyAgent());
-
-const Plan = z.object({ tasks: z.array(z.string()) });
-const Done = z.object({ summary: z.string() });
-
-const graph = new Graph()
-  .addNode('plan',   { prompt: 'List 3 tasks for: {{goal}}', outputSchema: Plan })
-  .addNode('finish', { prompt: 'Summarise the work',         outputSchema: Done })
-  .addEdge('plan', 'finish')
-  .setEntryPoint('plan');
-
-const { state } = await graph.run(null, {
-  goal: 'add a dark-mode toggle',
-  agentType: 'mine',
-});
-
-console.log(state.finish.summary);
-```
-
-See [`examples/`](./examples/) for runnable demos of each pattern.
 
 ---
 
