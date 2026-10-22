@@ -17,6 +17,7 @@ import { WorkflowState } from './state.js';
 import { Node } from './node.js';
 import { preferredAgentFor } from './node-vendor.js';
 import { nodeCompactAtTokens, COMPACT_AT_TOKENS } from './session-compaction.js';
+import { nodeHelpers, HELPERS } from './declared-helpers.js';
 import { nodeLessonsDeclaration, declaredLessonsBlock, LESSONS } from './declared-lessons.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
 import { runCollaboration } from './collaboration.js';
@@ -808,6 +809,10 @@ export class WorkflowGraph {
       // template sync — instead of on a run. Undeclared → no key.
       const compactAtTokens = nodeCompactAtTokens(node?.config, nodeId);
       if (compactAtTokens !== null) config[COMPACT_AT_TOKENS] = compactAtTokens;
+      // The node's declared helpers (declared-helpers.ts — the one reader), the
+      // same way: shown on the deployed graph, a malformed one fails the sync.
+      const helpers = nodeHelpers(node?.config, nodeId);
+      if (helpers) config[HELPERS] = helpers;
       // The node's declared lessons (declared-lessons.ts — the one reader): on
       // the serialized config so the deployed graph shows it, and a malformed
       // declaration fails the template sync instead of a run.
@@ -1801,7 +1806,13 @@ export class WorkflowGraph {
       // explicit option, above skill defaults. Undeclared → no key at all, so
       // the strategy keeps the vendor's own default.
       const compactAtTokens = nodeCompactAtTokens(node.config, currentNode);
-      const declaredInvokeOpts = compactAtTokens === null ? {} : { [COMPACT_AT_TOKENS]: compactAtTokens };
+      // …and its DECLARED helpers (declared-helpers.ts — the one reader): agents
+      // with their own instructions that its model may start. Undeclared → no key.
+      const helpers = nodeHelpers(node.config, currentNode);
+      const declaredInvokeOpts = {
+        ...(compactAtTokens === null ? {} : { [COMPACT_AT_TOKENS]: compactAtTokens }),
+        ...(helpers ? { [HELPERS]: helpers } : {}),
+      };
       // The node's DECLARED lessons (declared-lessons.ts): read once for this
       // node's execution through the host's reader, then added after the
       // node's own prompt on every model call it makes. Undeclared → '' and
@@ -1831,7 +1842,7 @@ export class WorkflowGraph {
         const nodePrompt = lessonsBlock ? `${prompt}\n\n${lessonsBlock}` : prompt;
         const strategyPromise = rawInvokeAgent(chatCall ? `${nodePrompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : nodePrompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
-          ...declaredInvokeOpts,  // the node's own declaration (compactAtTokens)
+          ...declaredInvokeOpts,  // the node's own declarations (compactAtTokens, helpers)
           ...opts,                // caller-explicit overrides
           ...(chatCall ? { schema: undefined } : {}),
           ...(attachmentFiles?.images.length ? { images: [...(Array.isArray(opts.images) ? opts.images : []), ...attachmentFiles.images] } : {}),
