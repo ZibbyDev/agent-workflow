@@ -17,6 +17,7 @@ import { WorkflowState } from './state.js';
 import { Node } from './node.js';
 import { preferredAgentFor } from './node-vendor.js';
 import { nodeCompactAtTokens, COMPACT_AT_TOKENS } from './session-compaction.js';
+import { nodeLessonsDeclaration, declaredLessonsBlock, LESSONS } from './declared-lessons.js';
 import { dispatchSubgraph } from './sub-graph-executor.js';
 import { runCollaboration } from './collaboration.js';
 import { withAgentContext } from './exec-context.js';
@@ -807,6 +808,11 @@ export class WorkflowGraph {
       // template sync — instead of on a run. Undeclared → no key.
       const compactAtTokens = nodeCompactAtTokens(node?.config, nodeId);
       if (compactAtTokens !== null) config[COMPACT_AT_TOKENS] = compactAtTokens;
+      // The node's declared lessons (declared-lessons.ts — the one reader): on
+      // the serialized config so the deployed graph shows it, and a malformed
+      // declaration fails the template sync instead of a run.
+      const lessonsDecl = nodeLessonsDeclaration(node?.config, nodeId);
+      if (lessonsDecl) config[LESSONS] = lessonsDecl.about ? { ...lessonsDecl } : { from: lessonsDecl.from };
       if (node.outputSchema) {
         if (typeof node.outputSchema._def !== 'undefined') {
           // Robust convert: prefer Zod v4's native converter, fall back to the
@@ -1796,6 +1802,12 @@ export class WorkflowGraph {
       // the strategy keeps the vendor's own default.
       const compactAtTokens = nodeCompactAtTokens(node.config, currentNode);
       const declaredInvokeOpts = compactAtTokens === null ? {} : { [COMPACT_AT_TOKENS]: compactAtTokens };
+      // The node's DECLARED lessons (declared-lessons.ts): read once for this
+      // node's execution through the host's reader, then added after the
+      // node's own prompt on every model call it makes. Undeclared → '' and
+      // nothing is read, so the prompt is byte-identical.
+      let lessonsBlockOnce: Promise<string> | null = null;
+      const lessonsBlockForNode = () => (lessonsBlockOnce ??= declaredLessonsBlock(node.config, currentNode, internalAbortController.signal));
       const boundInvokeAgent = async (prompt, ctx, opts: any = {}) => {
         modelCalled.add(currentNode);
         // Past the deadline no model call starts (a person's Stop keeps its
@@ -1815,7 +1827,9 @@ export class WorkflowGraph {
           ? await resolveChatAttachments(chatTurn.attachments, internalAbortController.signal) : null;
         const fileBlock = attachmentFiles?.files.length
           ? `\nAttached files (read these local files to inspect their contents):\n${attachmentFiles.files.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : '';
-        const strategyPromise = rawInvokeAgent(chatCall ? `${prompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : prompt, ctx, {
+        const lessonsBlock = await lessonsBlockForNode();
+        const nodePrompt = lessonsBlock ? `${prompt}\n\n${lessonsBlock}` : prompt;
+        const strategyPromise = rawInvokeAgent(chatCall ? `${nodePrompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : nodePrompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
           ...declaredInvokeOpts,  // the node's own declaration (compactAtTokens)
           ...opts,                // caller-explicit overrides

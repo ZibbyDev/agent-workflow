@@ -117,6 +117,8 @@ export { RUN_DEADLINE_ENV, RUN_LIMIT_MS_ENV, RUN_END_NOTICE_LEAD_MS, RUN_FINALIZ
 export { DEADLINE_STOP_KEY } from './deadline-stop.js';
 export type { DeadlineStopFact } from './deadline-stop.js';
 export { COMPACT_AT_TOKENS, nodeCompactAtTokens } from './session-compaction.js';
+export { LESSONS, LESSONS_BLOCK_MAX_CHARS, LESSONS_READ_TIMEOUT_MS, nodeLessonsDeclaration, registerLessonsReader, lessonsReader, lessonsFor, renderLessonsBlock, lessonsUnreadFact, declaredLessonsBlock } from './declared-lessons.js';
+export type { Lesson, LessonsDeclaration, LessonsReader } from './declared-lessons.js';
 export { registerPersonAnswerTool, personAnswerTool, UNANSWERED_TEXT_MAX_CHARS, UNANSWERED_MAX_LINES, recordPersonLine, markPersonLineAnswered, markPersonLineNoted, unansweredPersonLines, clearPersonLines, unansweredLineFact, unansweredLinesBlock, unansweredLineNote } from './unanswered-lines.js';
 export { UNAVAILABLE_REASON_MAX_CHARS, recordUnavailableTools, clearUnavailableTools, unavailableToolsFor, unavailableToolFact, unavailableToolsBlock } from './unavailable-tools.js';
 export { REPOSITORY_RULE_FILES, WORKSPACE_RULE_FILES, RULE_FILE_MAX_BYTES, RULES_TOTAL_MAX_BYTES, REPOSITORY_RULES_HEADING, RULE_FILE_INDEX_HEADING, WORKSPACE_RULES_HEADING, collectRepositoryRules, renderRepositoryRules, repositoryRulesBlock, preparedFoldersBlock, PREPARED_FOLDERS_HEADING, nativelyLoaded, workingChain, preparedProjectFolders, preparedWorkspaces, ruleFilesInDirectory, ruleLocationOf, ruleFileDeclaration, sendsInFull, maskCredentials, registerCheckoutDirectories, checkoutDirectories } from './repository-rules.js';

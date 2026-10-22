@@ -18,7 +18,7 @@ const read = (file: string) => readFileSync(join(SRC, file), 'utf8');
 const PLATFORM_ACCESS = /PROJECT_API_TOKEN|USER_TOKEN|PROGRESS_API_URL|ACCOUNT_API_URL|SUBGRAPH_INTERNAL_URL|PROJECT_ID\b|\/artifacts\/|\/internal\/subgraph|\/executions\b|\/workflows\/|zibby\.app|'\.zibby'|report_progress/;
 
 describe('the engine holds no platform access', () => {
-  for (const file of ['sub-graph-executor.ts', 'in-process-subgraph.ts', 'chat-attachments.ts', 'chat-entry.ts', 'graph.ts', 'repository-rules.ts', 'unanswered-lines.ts']) {
+  for (const file of ['sub-graph-executor.ts', 'in-process-subgraph.ts', 'chat-attachments.ts', 'chat-entry.ts', 'graph.ts', 'repository-rules.ts', 'unanswered-lines.ts', 'declared-lessons.ts']) {
     it(`${file}: no platform env, API path, folder or tool name`, () => {
       const text = read(file);
       const hit = text.split('\n').find((line) => PLATFORM_ACCESS.test(line));
