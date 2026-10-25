@@ -33,8 +33,11 @@ export const CHAT_ENTRY_FLAG = 'chatEntry';
 /**
  * The invocation option that says THIS model call is a chat call: the declared
  * chat-entry node answering a person on a chat turn (the call whose run log
- * reads "mode: chat"). Set by the engine only (graph.ts), never by a node, and
- * read by a strategy as a fact about the call. What a strategy may do with it
+ * reads "mode: chat"). Set by the engine (graph.ts) and read by a strategy as
+ * a fact about the call. A node may say `false` on a call of its own: that
+ * call is NOT the chat answer but ordinary work the same run goes on to do
+ * after answering (its schema is sent, nothing is appended, no reply is
+ * delivered for it); `true` from a node changes nothing. What a strategy may do with it
  * is narrow: present the SAME tools in a lighter way for a turn that is a
  * conversation (e.g. a codex chat call reaches workspace tools through the
  * shared toolbox instead of holding a connection and schemas for each) — every

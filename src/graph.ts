@@ -1444,7 +1444,7 @@ export class WorkflowGraph {
     // declares no such node: running the agent would answer nobody.
     const chatTurn = normalizeChatTurn(initialState.chat);
     let chatNodeId: string | null = null;
-    const chatReplies: Array<{ node: string; text: string }> = [];
+    const chatReplies: Array<{ node: string; text: string; seq?: number }> = [];
     if (chatTurn) {
       for (const [id, n] of this.nodes) {
         if (declaresChatEntry(n)) { chatNodeId = id; break; }
@@ -1464,6 +1464,26 @@ export class WorkflowGraph {
       }
       timeline.step(`Chat turn — '${chatNodeId}' answers the person`);
     }
+    // EVERYTHING A CHAT RUN SAYS TO THE PERSON goes out here: the chat call's
+    // reply, and anything a node of the same run says later through
+    // `context.replyToPerson` (a run that took on work from the conversation
+    // reporting how it ended). Each is delivered the moment it is said. The
+    // second and later carry `seq` (2, 3, …) so the host can tell a new message
+    // from the first one again; a run that says one thing sends exactly what it
+    // always sent.
+    const replyToPerson = async (node: string, said: string) => {
+      const text = typeof said === 'string' ? said.trim() : '';
+      if (!chatTurn || !text) return false;
+      const seq = chatReplies.length + 1;
+      const reply = { node, text, ...(seq > 1 ? { seq } : {}) };
+      chatReplies.push(reply);
+      timeline.step('Replied to the person');
+      if (typeof options.onChatReply === 'function') {
+        try { await options.onChatReply(reply); }
+        catch (err: any) { console.warn(`[workflow] chat reply could not be delivered: ${err?.message || err}`); return false; }
+      }
+      return true;
+    };
 
     // Host processes (desktop apps, IDE plugins, CLIs) can pin a specific
     // session folder by setting ZIBBY_PIN_SESSION_PATH=1 + ZIBBY_SESSION_PATH
@@ -1805,7 +1825,13 @@ export class WorkflowGraph {
       // that ignores AbortSignal hangs graph.run forever.
       // Is this node's model call the CHAT call? Only on a chat turn, only for
       // the declared node — every other node and every other run is untouched.
+      // A call of that node may say it is NOT the chat answer (`[CHAT_CALL]:
+      // false` in its options): the person has their reply and the run goes on
+      // with ordinary work in the same node — e.g. a planner that answered
+      // "I'm on it" and now plans, in the same run. Such a call is an ordinary
+      // call: its schema is sent and nothing is appended to its prompt.
       const chatCall = !!(chatTurn && currentNode === chatNodeId);
+      const chatCallFor = (opts: any) => chatCall && opts?.[CHAT_CALL] !== false;
       // The node's DECLARED compaction size (session-compaction.ts — the one
       // reader), handed to every model call this node makes. Below a caller's
       // explicit option, above skill defaults. Undeclared → no key at all, so
@@ -1839,17 +1865,18 @@ export class WorkflowGraph {
         // A CHAT call carries the conversation and the person's words after the
         // node's own prompt, and sends no structured-answer schema: the reply is
         // free text and it is what the person reads.
-        const attachmentFiles = chatCall && chatTurn?.attachments?.length
+        const isChatCall = chatCallFor(opts);
+        const attachmentFiles = isChatCall && chatTurn?.attachments?.length
           ? await resolveChatAttachments(chatTurn.attachments, internalAbortController.signal) : null;
         const fileBlock = attachmentFiles?.files.length
           ? `\nAttached files (read these local files to inspect their contents):\n${attachmentFiles.files.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : '';
         const lessonsBlock = await lessonsBlockForNode();
         const nodePrompt = lessonsBlock ? `${prompt}\n\n${lessonsBlock}` : prompt;
-        const strategyPromise = rawInvokeAgent(chatCall ? `${nodePrompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : nodePrompt, ctx, {
+        const strategyPromise = rawInvokeAgent(isChatCall ? `${nodePrompt}\n${renderChatTurn(chatTurn as any)}${fileBlock}` : nodePrompt, ctx, {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
           ...declaredInvokeOpts,  // the node's own declarations (compactAtTokens, helpers)
           ...opts,                // caller-explicit overrides
-          ...(chatCall ? { schema: undefined, [CHAT_CALL]: true } : {}),
+          ...(isChatCall ? { schema: undefined, [CHAT_CALL]: true } : {}),
           ...(attachmentFiles?.images.length ? { images: [...(Array.isArray(opts.images) ? opts.images : []), ...attachmentFiles.images] } : {}),
           // Engine always wins. A person's Stop OR the run's deadline.
           signal: modelSignal,
@@ -1864,16 +1891,8 @@ export class WorkflowGraph {
         // bookkeeping and the rest of the run — so the person is not kept
         // waiting on work that is not an answer to them. Awaited, so a run that
         // ends right after its answer cannot exit before the answer is out.
-        const deliver = (p: Promise<any>) => (!chatCall ? p : p.then(async (res) => {
-          const text = chatReplyText(res);
-          if (text) {
-            chatReplies.push({ node: currentNode, text });
-            timeline.step('Replied to the person');
-            if (typeof options.onChatReply === 'function') {
-              try { await options.onChatReply({ node: currentNode, text }); }
-              catch (err: any) { console.warn(`[workflow] chat reply could not be delivered: ${err?.message || err}`); }
-            }
-          }
+        const deliver = (p: Promise<any>) => (!isChatCall ? p : p.then(async (res) => {
+          await replyToPerson(currentNode, chatReplyText(res));
           return res;
         }));
         // Suppress "unhandled rejection" if the deadman wins and the
@@ -2000,6 +2019,9 @@ export class WorkflowGraph {
         nodeId: currentNode,
         promptTemplate,
         getPromptTemplate: () => promptTemplate,
+        // On a chat run only: say something more to the person in the same
+        // conversation (see `replyToPerson` above). Absent on every other run.
+        ...(chatTurn ? { replyToPerson: (text: string) => replyToPerson(currentNode, text) } : {}),
       };
 
       try {

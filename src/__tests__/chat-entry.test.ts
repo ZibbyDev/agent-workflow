@@ -147,6 +147,61 @@ describe('a chat turn', () => {
   });
 });
 
+describe('a chat run that goes on working after its answer (same run, same conversation)', () => {
+  // The chat node answers, then — in the SAME run — makes an ordinary work
+  // call (`[CHAT_CALL]: false`) and a later node tells the person how it ended.
+  function workingGraph(invokeAgent) {
+    const graph = new WorkflowGraph({ invokeAgent });
+    graph.addNode('planner', {
+      name: 'planner', chatEntry: true, prompt: () => 'You are the planner.', outputSchema: z.object({}).passthrough(),
+      async execute(ctx) {
+        const said = await ctx.invokeAgent({}, { prompt: 'You are the planner.' });
+        const plan = await ctx.invokeAgent({}, { prompt: 'Plan the PRD.', schema: { plan: 'schema' }, [CHAT_CALL]: false });
+        return { said, plan };
+      },
+    });
+    graph.addNode('write', {
+      name: 'write', _isCustomCode: true,
+      async execute(ctx) {
+        const told = typeof ctx.replyToPerson === 'function' ? await ctx.replyToPerson('Done: 3 tickets are on the board.') : 'absent';
+        return { success: true, output: { told } };
+      },
+    });
+    graph.setEntryPoint('planner');
+    graph.addEdge('planner', 'write');
+    graph.addEdge('write', 'END');
+    return graph;
+  }
+
+  it('a call that says it is not the chat answer is an ordinary call; a later node\'s words reach the person as a second reply', async () => {
+    const calls: any[] = [];
+    const invokeAgent = vi.fn(async (prompt, _ctx, opts) => { calls.push({ prompt, opts }); return opts?.schema ? { raw: '{}', structured: { tickets: 3 } } : 'On it — planning now.'; });
+    const onChatReply = vi.fn(async () => {});
+    const res: any = await workingGraph(invokeAgent).run({}, { chat: { message: 'plan the tickets please' } }, { onChatReply });
+    expect(res.success).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0].opts[CHAT_CALL]).toBe(true);
+    expect(calls[0].opts.schema).toBeUndefined();
+    // the work call: its schema, its own prompt, not marked a chat call, no reply delivered for it
+    expect(calls[1].opts.schema).toEqual({ plan: 'schema' });
+    expect(calls[1].opts[CHAT_CALL]).toBe(false);
+    expect(calls[1].prompt).toBe('Plan the PRD.');
+    expect(res.state.write.output.told).toBe(true);
+    expect(onChatReply.mock.calls.map((c) => c[0])).toEqual([
+      { node: 'planner', text: 'On it — planning now.' },
+      { node: 'write', text: 'Done: 3 tickets are on the board.', seq: 2 },
+    ]);
+    expect(res.chatReplies).toHaveLength(2);
+  });
+
+  it('a run that is not a chat turn has no replyToPerson', async () => {
+    const invokeAgent = vi.fn(async () => ({ raw: '{}', structured: {} }));
+    const res: any = await workingGraph(invokeAgent).run({}, {});
+    expect(res.state.write.output.told).toBe('absent');
+    expect(res).not.toHaveProperty('chatReplies');
+  });
+});
+
 describe('normalizeChatTurn / renderChatTurn', () => {
   it('keeps the NEWEST conversation within the character bound and drops junk rows', () => {
     const big = 'x'.repeat(Math.floor(CHAT_CONVERSATION_MAX_CHARS / 2) + 10);
