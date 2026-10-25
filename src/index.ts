@@ -160,5 +160,5 @@ export { timeline, Timeline, WORKFLOW_GRAPH_LOG_MARKER_PREFIX } from './timeline
 export { COMPOSE_KNOWLEDGE } from './compose-knowledge.js';
 
 // The run's startup timeline — when each step before the first model request
-// finished (startup-marks.ts; @zibby/cli prints it after the run).
-export { markStartup, STARTUP_MARK_PREFIX } from './startup-marks.js';
+// finished, and the one line a runner prints after the run (startup-marks.ts).
+export { markStartup, STARTUP_MARK_PREFIX, startupTimelineLine, containerLeadMs } from './startup-marks.js';
