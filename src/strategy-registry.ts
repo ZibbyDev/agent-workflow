@@ -16,7 +16,7 @@ import { AgentStrategy } from './agents/base.js';
 import { logger } from './logger.js';
 import { getSkill, skillPromptText, searchedSkillIds } from './skill-registry.js';
 import { currentRunEffort, currentEffortCeiling } from './exec-context.js';
-import { repositoryRulesParts, preparedFoldersBlock } from './repository-rules.js';
+import { repositoryRulesPartsAsync, preparedFoldersBlock } from './repository-rules.js';
 import { runDeadlineSentence } from './run-deadline.js';
 import { unansweredLinesBlock } from './unanswered-lines.js';
 import { unavailableToolsBlock } from './unavailable-tools.js';
@@ -583,7 +583,8 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // every vendor, the same block; '' when the node works in no repository.
   // Placed before the operator's override block, which stays last and wins.
   // One function for both invokeAgent paths (repository-rules.ts).
-  for (const p of repositoryRulesParts({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots })) {
+  // Its folders are read ahead in parallel (repositoryRulesPartsAsync); the parts are repositoryRulesParts' own.
+  for (const p of await repositoryRulesPartsAsync({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots })) {
     add(p.key, `\n\n${p.text}`);
   }
 

@@ -158,3 +158,7 @@ export { timeline, Timeline, WORKFLOW_GRAPH_LOG_MARKER_PREFIX } from './timeline
 // (a chat assistant's skill, an agent-builder template, a project's generated
 // agent instructions) imports instead of hand-copying. See src/compose-knowledge.js editing policy.
 export { COMPOSE_KNOWLEDGE } from './compose-knowledge.js';
+
+// The run's startup timeline — when each step before the first model request
+// finished (startup-marks.ts; @zibby/cli prints it after the run).
+export { markStartup, STARTUP_MARK_PREFIX } from './startup-marks.js';

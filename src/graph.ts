@@ -37,6 +37,7 @@ import {
   STOP_REQUEST_FILE,
 } from './constants.js';
 import { timeline } from './timeline.js';
+import { markStartup } from './startup-marks.js';
 import {
   CHAT_ENTRY_FLAG, CHAT_CALL, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
 } from './chat-entry.js';
@@ -1748,6 +1749,10 @@ export class WorkflowGraph {
 
       timeline.nodeStart(currentNode);
       const startTime = Date.now();
+      // On the startup timeline (startup-marks.ts): the first node, and — when
+      // this node is the first to ask a model — the moment it started.
+      const nodeStartedAt = performance.now();
+      markStartup('first node');
 
       const promptTemplate = this.nodePrompts.get(currentNode);
 
@@ -1910,6 +1915,8 @@ export class WorkflowGraph {
       // Wrap invokeAgent so node code calls `invokeAgent(promptValues)` and we
       // render the node's prompt template (Handlebars) with those values.
       const invokeAgent = async (promptValues: any = {}, options: any = {}) => {
+        markStartup('model node', nodeStartedAt);
+        markStartup('model call');
         let finalPrompt = options.prompt || '';
 
         if (promptTemplate) {

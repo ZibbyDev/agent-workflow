@@ -67,9 +67,11 @@
  */
 
 import { lstatSync, readdirSync, openSync, readSync, closeSync, existsSync, constants, fstatSync } from 'fs';
+import { readdir } from 'fs/promises';
 import type { Dirent } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute, sep, basename, normalize } from 'path';
 import { spawnSync } from 'child_process';
+import { markStartup } from './startup-marks.js';
 
 /**
  * One well-known rule location, relative to a directory:
@@ -624,8 +626,11 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
 }
 
 /** Subfolders under `top` for checkout discovery (fixed skips only). */
-function subfolders(top: string, includeCheckoutCache = false): string[] {
-  return walkSubfolders(top, { includeCheckoutCache }).map((w) => w.dir);
+function subfolders(top: string, includeCheckoutCache = false, listings: ListingCache | null = null): string[] {
+  // A listing is read only for a real directory; a top that is a symlink is
+  // read through it, as the walk without listings always did.
+  const read = listings && isRealDir(top) ? listings : null;
+  return walkSubfolders(top, { includeCheckoutCache, listings: read }).map((w) => w.dir);
 }
 
 /** One project folder the runner prepared for this run, as its manifest says. */
@@ -812,7 +817,7 @@ export interface RuleRoot {
  * is still one file) — is listed once, in full if either root sends it in
  * full. Never throws.
  */
-export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity }: { identity?: PathIdentity } = {}): RuleFile[] {
+export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity, listings = new Map() }: { identity?: PathIdentity; listings?: ListingCache } = {}): RuleFile[] {
   type Found = Omit<RuleFile, 'full' | 'summary' | 'text' | 'bytes'> & { onDemand: boolean; primary: boolean };
   const found = new Map<string, Found>();
   const byPlace = (f: Found) => sendsInFull({ origin: f.origin, primary: f.primary });
@@ -828,8 +833,8 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
   const ask = ignoreAsker();
   // Every folder this collection looks at is listed once and the listing is
   // reused (directoryListing): the walk, its `.git` check and the rule-file
-  // lookup each used to ask the filesystem separately.
-  const listings: ListingCache = new Map();
+  // lookup each used to ask the filesystem separately. The caller may hand
+  // over listings read ahead (prefetchListings).
   for (const r of roots || []) {
     if (!r || typeof r.dir !== 'string' || !r.dir || !isRealDir(r.dir)) continue;
     const primary = r.primary !== false;
@@ -1029,11 +1034,100 @@ export function repositoryRulesBlock(args: { workspace?: string; strategy?: any;
  * repositoryRulesBlock as its pieces (renderRepositoryRulesParts); [] when there are none. Never throws.
  * `identity` says what a path is on disk (default: the filesystem's device + inode, `pathIdentity`).
  */
-export function repositoryRulesParts({ workspace, strategy, env = process.env, repositoryRoots = [], identity = pathIdentity }: { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown; identity?: PathIdentity } = {}): PromptPart[] {
+type RulesArgs = { workspace?: string; strategy?: any; env?: Record<string, string | undefined>; repositoryRoots?: unknown; identity?: PathIdentity };
+
+/** The working directory and the folders named for this call, as both entry points read them. */
+function rulesInputs({ workspace, repositoryRoots = [] }: RulesArgs): { cwd: string; named: string[] } {
+  const cwd = typeof workspace === 'string' && workspace ? workspace : process.cwd();
+  const named = (Array.isArray(repositoryRoots) ? repositoryRoots : [])
+    .filter((d): d is string => typeof d === 'string' && isAbsolute(d)).slice(0, 16);
+  return { cwd, named };
+}
+
+export function repositoryRulesParts(args: RulesArgs = {}): PromptPart[] {
+  return rulesPartsWith(args, new Map());
+}
+
+/**
+ * repositoryRulesParts, the same parts, with the folders it will look at
+ * listed ahead IN PARALLEL first. The walk below reads one folder at a time and
+ * waits for each; on a project folder mounted into a run container (~1 ms a
+ * listing, more on a loaded machine) its ~700 listings took 0.6–2.0 s before
+ * every first model call (run_log/product-owner/2026-10-25-run-boot-to-first-
+ * turn). The listings read ahead are the same `readdir` answers the walk would
+ * get; a folder not read ahead is read by the walk itself, as before.
+ */
+export async function repositoryRulesPartsAsync(args: RulesArgs = {}): Promise<PromptPart[]> {
+  const listings: ListingCache = new Map();
   try {
-    const cwd = typeof workspace === 'string' && workspace ? workspace : process.cwd();
-    const named = (Array.isArray(repositoryRoots) ? repositoryRoots : [])
-      .filter((d): d is string => typeof d === 'string' && isAbsolute(d)).slice(0, 16);
+    const { cwd, named } = rulesInputs(args);
+    const prepared = preparedWorkspaces(args.env || process.env).filter((w) => !w.selectable).map((w) => w.directory);
+    await prefetchListings([cwd, ...prepared, ...named], listings);
+  } catch { /* nothing read ahead: the walk reads every folder itself */ }
+  return rulesPartsWith(args, listings);
+}
+
+/** How many folders below each top are read ahead, and how deep: the walk's own bounds, one level further (the rule lookup lists the walk's deepest folders too). */
+const PREFETCH_MAX_DIRS = 2 * MAX_DIRS_SCANNED;
+const PREFETCH_CONCURRENCY = 16;
+
+/**
+ * Lists the real folders under each top, breadth first, in parallel, into
+ * `listings` — the folders the walk and the rule lookup will list, by the
+ * walk's own skips (hidden and dependency folders, symlinks) and bounds. A
+ * folder git ignores is read too (the walk asks git per level; reading it
+ * costs a parallel listing, never a different answer). A folder that cannot be
+ * listed is left out, so the walk asks for it itself.
+ */
+async function prefetchListings(tops: string[], listings: ListingCache): Promise<void> {
+  const queue: Array<{ dir: string; depth: number; top: string }> = [];
+  const listedPerTop = new Map<string, number>();
+  for (const top of [...new Set(tops.map((t) => resolve(t)))]) {
+    if (isRealDir(top)) queue.push({ dir: top, depth: 0, top });
+  }
+  const seen = new Set<string>();
+  const listOne = async ({ dir, depth, top }: { dir: string; depth: number; top: string }): Promise<void> => {
+    // Each top walks its own tree to its own depth; a folder another top
+    // already listed is not listed again, only followed.
+    const key = `${top}\0${dir}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const count = listedPerTop.get(top) || 0;
+    if (count >= PREFETCH_MAX_DIRS) return;
+    listedPerTop.set(top, count + 1);
+    let listing = listings.get(dir);
+    if (listing === undefined) {
+      let entries: Dirent[];
+      try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      listing = listings.get(dir) ?? new Map(entries.map((e) => [e.name, e] as [string, Dirent]));
+      listings.set(dir, listing);
+    }
+    if (!listing || depth >= MAX_DEEPER_DEPTH) return;
+    for (const e of [...listing.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      if (!e.isDirectory() || e.isSymbolicLink() || e.name.startsWith('.') || DEPENDENCY_DIRS.has(e.name)) continue;
+      queue.push({ dir: join(dir, e.name), depth: depth + 1, top });
+    }
+  };
+  // Breadth first, PREFETCH_CONCURRENCY listings in flight; each finished
+  // listing lets the next queued folders start.
+  await new Promise<void>((done) => {
+    let active = 0;
+    const pump = () => {
+      while (active < PREFETCH_CONCURRENCY && queue.length) {
+        const item = queue.shift()!;
+        active += 1;
+        listOne(item).catch(() => {}).finally(() => { active -= 1; pump(); });
+      }
+      if (active === 0 && !queue.length) done();
+    };
+    pump();
+  });
+}
+
+function rulesPartsWith(args: RulesArgs, listings: ListingCache): PromptPart[] {
+  const { workspace, strategy, env = process.env, identity = pathIdentity } = args;
+  try {
+    const { cwd, named } = rulesInputs(args);
     // An entry listed only for choosing has no files to read rules from.
     const prepared = preparedWorkspaces(env).filter((w) => !w.selectable);
     const asRoot = (w: PreparedWorkspace): RuleRoot => ({ dir: w.directory, declared: true, primary: w.primary, originalPath: w.originalPath, ancestors: w.ancestorRuleFiles });
@@ -1066,13 +1160,16 @@ export function repositoryRulesParts({ workspace, strategy, env = process.env, r
       // A clone tool may have created this checkout in an earlier node. Every
       // invocation discovers those repositories from the same bounded,
       // symlink-free workspace walk, without template-specific plumbing.
-      ...subfolders(cwd, true).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
+      ...subfolders(cwd, true, listings).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
         .map((dir) => ({ dir, declared: true })),
     ];
-    const files = collectRepositoryRules(roots, { identity });
+    const files = collectRepositoryRules(roots, { identity, listings });
     if (!files.length) return [];
     return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
   } catch {
     return [];
+  } finally {
+    // The run's startup timeline (startup-marks.ts): the first model call's rule files are read.
+    markStartup('repository rules read');
   }
 }
