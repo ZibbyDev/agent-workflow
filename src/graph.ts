@@ -38,7 +38,7 @@ import {
 } from './constants.js';
 import { timeline } from './timeline.js';
 import {
-  CHAT_ENTRY_FLAG, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
+  CHAT_ENTRY_FLAG, CHAT_CALL, declaresChatEntry, chatEntryProblems, normalizeChatTurn, renderChatTurn, chatReplyText,
 } from './chat-entry.js';
 import { chatAttachmentsUnreadable, resolveChatAttachments } from './chat-attachments.js';
 import { runDeadline, RUN_FINALIZE_GRACE_MS } from './run-deadline.js';
@@ -1844,7 +1844,7 @@ export class WorkflowGraph {
           ...skillInvokeOpts,    // skill defaults (e.g. session)
           ...declaredInvokeOpts,  // the node's own declarations (compactAtTokens, helpers)
           ...opts,                // caller-explicit overrides
-          ...(chatCall ? { schema: undefined } : {}),
+          ...(chatCall ? { schema: undefined, [CHAT_CALL]: true } : {}),
           ...(attachmentFiles?.images.length ? { images: [...(Array.isArray(opts.images) ? opts.images : []), ...attachmentFiles.images] } : {}),
           // Engine always wins. A person's Stop OR the run's deadline.
           signal: modelSignal,

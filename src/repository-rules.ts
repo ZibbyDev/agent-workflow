@@ -67,6 +67,7 @@
  */
 
 import { lstatSync, readdirSync, openSync, readSync, closeSync, existsSync, constants, fstatSync } from 'fs';
+import type { Dirent } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute, sep, basename, normalize } from 'path';
 import { spawnSync } from 'child_process';
 
@@ -336,11 +337,39 @@ export function workingChain(dir: string): { root: string; chain: string[]; inRe
   return { root: start, chain: [start], inRepository: false };
 }
 
-/** Every folder from `dir` down through `rel` is a real directory (no symlink on the way). */
-function realSubdirectory(dir: string, rel: string): boolean {
+/**
+ * `dir`'s entries by name, read once — or null when `dir` is not a real
+ * directory or cannot be listed (the caller then asks path by path).
+ */
+export type Listing = Map<string, Dirent>;
+/** Listings read during ONE collection, by directory: each folder is read once. */
+export type ListingCache = Map<string, Listing | null>;
+function directoryListing(dir: string, cache: ListingCache | null = null, knownRealDir = false): Listing | null {
+  if (cache && cache.has(dir)) return cache.get(dir) as Listing | null;
+  let listing: Listing | null = null;
+  if (knownRealDir || isRealDir(dir)) {
+    try { listing = new Map(readdirSync(dir, { withFileTypes: true }).map((e) => [e.name, e] as [string, Dirent])); }
+    catch { listing = null; }
+  }
+  if (cache) cache.set(dir, listing);
+  return listing;
+}
+
+/**
+ * Every folder from `dir` down through `rel` is a real directory (no symlink on
+ * the way). With `listing` (dir's entries, which also proves dir itself is a
+ * real directory) the first step is answered from it.
+ */
+function realSubdirectory(dir: string, rel: string, listing: Listing | null = null): boolean {
   let current = dir;
-  if (!isRealDir(current)) return false;
-  for (const part of rel.split('/').filter((p) => p && p !== '.')) {
+  const parts = rel.split('/').filter((p) => p && p !== '.');
+  if (listing) {
+    if (!parts.length) return true;
+    const first = listing.get(parts[0]);
+    if (!first || !first.isDirectory()) return false;
+    current = join(current, parts.shift() as string);
+  } else if (!isRealDir(current)) return false;
+  for (const part of parts) {
     current = join(current, part);
     if (!isRealDir(current)) return false;
   }
@@ -352,20 +381,39 @@ function realSubdirectory(dir: string, rel: string): boolean {
  * order, never through a symlinked file or folder. Exported as the reference
  * the runner's own ancestor discovery is checked against.
  */
-export function ruleFilesInDirectory(dir: string): Array<{ path: string; name: string; onDemand: boolean }> {
+export function ruleFilesInDirectory(dir: string, listings: ListingCache | null = null): Array<{ path: string; name: string; onDemand: boolean }> {
   const out: Array<{ path: string; name: string; onDemand: boolean }> = [];
   const md = (n: string) => /\.(md|mdc)$/i.test(n);
   const sorted = (d: string) => { try { return readdirSync(d).sort(); } catch { return [] as string[]; } };
+  // THE DIRECTORY IS READ ONCE. Every location starts with one name directly
+  // in `dir` (`AGENTS.md`, `.claude`, `.github`, `.cursor`); a location whose
+  // first name is not listed here cannot exist, so it costs nothing. Asking the
+  // filesystem about each location's path instead was ~16 lstat calls per
+  // folder: on a project folder mounted into a run container (a shared host
+  // folder, ~0.3 ms a call) the walk of ~450 folders took 2.9–4.1 s before
+  // every model call (run_log/product-owner/2026-10-25-chat-turn-tool-startup-latency).
+  // A listed entry's type is the filesystem's own (a symlink is never a file
+  // or a folder here), the same answer lstat gives. A folder that cannot be
+  // listed falls back to asking path by path, as before.
+  const listing = directoryListing(dir, listings);
+  const present = (rel: string): boolean => {
+    if (!listing) return true;
+    const first = rel.split('/').find((p) => p && p !== '.');
+    return first === undefined || listing.has(first);
+  };
   for (const entry of REPOSITORY_RULE_FILES) {
     const onDemand = entry.onDemand === true;
     if (entry.file) {
+      if (!present(entry.file)) continue;
       // lstat on the final file alone follows symlinked parent directories:
       // every rule-location directory is checked first.
-      if (!realSubdirectory(dir, dirname(entry.file))) continue;
+      if (!realSubdirectory(dir, dirname(entry.file), listing)) continue;
       const p = join(dir, entry.file);
-      if (isFile(p)) out.push({ path: p, name: entry.file, onDemand });
+      const direct = listing && dirname(entry.file) === '.' ? listing.get(entry.file) : undefined;
+      if (direct ? direct.isFile() : isFile(p)) out.push({ path: p, name: entry.file, onDemand });
     } else if (entry.dir) {
-      if (!realSubdirectory(dir, entry.dir)) continue;
+      if (!present(entry.dir)) continue;
+      if (!realSubdirectory(dir, entry.dir, listing)) continue;
       const d = join(dir, entry.dir);
       if (entry.each) {
         let n = 0;
@@ -476,6 +524,21 @@ function ignoreAsker(): IgnoreAsker {
   };
 }
 
+/**
+ * Does `dir` hold `.git` (a folder, or the file a worktree has)? Read from the
+ * folder's listing when the collection keeps one — the same listing its
+ * rule-file lookup and the next level of the walk read — else asked directly.
+ * A symlinked `.git` is asked directly, as before (it counts only when it
+ * leads somewhere).
+ */
+function holdsGit(dir: string, listings: ListingCache | null): boolean {
+  if (!listings) return existsSync(join(dir, '.git'));
+  const listing = directoryListing(dir, listings, true);
+  const git = listing?.get('.git');
+  if (!listing || (git && git.isSymbolicLink())) return existsSync(join(dir, '.git'));
+  return !!git;
+}
+
 /** A folder found by the walk and the repository whose ignore rules govern it (null = none / git cannot say). */
 interface WalkedDir { dir: string; repo: string | null }
 
@@ -488,8 +551,8 @@ interface WalkedDir { dir: string; repo: string | null }
  * repository. Without it (the checkout discovery walk) only the fixed skips
  * apply.
  */
-function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker() }:
-  { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker } = {}): WalkedDir[] {
+function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker(), listings = null }:
+  { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker; listings?: ListingCache | null } = {}): WalkedDir[] {
   const out: WalkedDir[] = [];
   let level: WalkedDir[] = [{ dir: top, repo: honourIgnore ? repository : null }];
   let scanned = 0;
@@ -499,8 +562,17 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
     for (const { dir, repo } of level) {
       if (scanned >= MAX_DIRS_SCANNED) break;
       scanned += 1;
-      let entries: any[] = [];
-      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      let entries: Dirent[] = [];
+      if (listings) {
+        // The collection's own listing (read once per folder; the rule-file
+        // lookup reads the same one). `dir` came from a listing as a real
+        // folder, or is the walk's top, which is checked.
+        const listing = directoryListing(dir, listings, dir !== top);
+        if (!listing) continue;
+        entries = [...listing.values()];
+      } else {
+        try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      }
       entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const e of entries) {
         if (!e.isDirectory() || e.isSymbolicLink()) continue;
@@ -516,7 +588,7 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
           continue;
         }
         const child = join(dir, e.name);
-        const ownRepo = honourIgnore && existsSync(join(child, '.git'));
+        const ownRepo = honourIgnore && holdsGit(child, listings);
         found.push({ dir: child, repo: ownRepo ? child : repo, name: e.name, ownRepo, cache: false });
       }
     }
@@ -754,6 +826,10 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
     if (!had || (!byPlace(had) && byPlace(f))) found.set(key, f);
   };
   const ask = ignoreAsker();
+  // Every folder this collection looks at is listed once and the listing is
+  // reused (directoryListing): the walk, its `.git` check and the rule-file
+  // lookup each used to ask the filesystem separately.
+  const listings: ListingCache = new Map();
   for (const r of roots || []) {
     if (!r || typeof r.dir !== 'string' || !r.dir || !isRealDir(r.dir)) continue;
     const primary = r.primary !== false;
@@ -774,7 +850,7 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
     above.sort((a, b) => a.governs.length - b.governs.length);
     for (const f of above) add(f);
     for (const d of chain) {
-      for (const f of ruleFilesInDirectory(d)) add({ ...f, root, scope: relative(root, d), governs: d, onChain: true, origin: 'chain', primary });
+      for (const f of ruleFilesInDirectory(d, listings)) add({ ...f, root, scope: relative(root, d), governs: d, onChain: true, origin: 'chain', primary });
     }
     if (!inRepository && !r.declared) continue;
     const workDir = chain[chain.length - 1];
@@ -782,8 +858,8 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
     // that holds it: a rule file git ignores (not just one in an ignored
     // folder) is not that repository's rule either.
     const below: Array<Found & { repo: string | null }> = [];
-    for (const { dir: d, repo } of walkSubfolders(workDir, { honourIgnore: true, repository: inRepository ? root : null, ask })) {
-      for (const f of ruleFilesInDirectory(d)) {
+    for (const { dir: d, repo } of walkSubfolders(workDir, { honourIgnore: true, repository: inRepository ? root : null, ask, listings })) {
+      for (const f of ruleFilesInDirectory(d, listings)) {
         below.push({ ...f, repo, root, scope: relative(root, d), governs: d, onChain: false, origin: 'subfolder', primary });
       }
     }

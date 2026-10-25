@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { WorkflowGraph } from '../graph.js';
-import { normalizeChatTurn, renderChatTurn, CHAT_CONVERSATION_MAX_CHARS, CHAT_REPLY_TASTE } from '../chat-entry.js';
+import { normalizeChatTurn, renderChatTurn, CHAT_CONVERSATION_MAX_CHARS, CHAT_REPLY_TASTE, CHAT_CALL } from '../chat-entry.js';
 
 function chatGraph(invokeAgent, { declare = true } = {}) {
   const graph = new WorkflowGraph({ invokeAgent });
@@ -90,6 +90,10 @@ describe('a chat turn', () => {
     expect(prompt).toContain('[you] Hello — what do you need?');
     expect(opts.schema).toBeUndefined();
     expect(opts.nodeName).toBe('manager');
+    // The strategy is told this call is the chat call (a fact it may use to
+    // present the same tools more lightly — run_log/product-owner/2026-10-25-chat-turn-tool-startup-latency).
+    expect(CHAT_CALL).toBe('chatCall');
+    expect(opts[CHAT_CALL]).toBe(true);
 
     expect(onChatReply).toHaveBeenCalledWith({ node: 'manager', text: 'Ticket 12 is in progress; 14 is waiting for review.' });
     expect(res.chatReplies).toEqual([{ node: 'manager', text: 'Ticket 12 is in progress; 14 is waiting for review.' }]);
@@ -119,6 +123,7 @@ describe('a chat turn', () => {
     const res: any = await chatGraph(invokeAgent).run({}, {});
     expect(calls[0].prompt).toBe('You are the manager. Board: 3 tickets.');
     expect(calls[0].opts.schema).toEqual({ fake: 'schema' });
+    expect(calls[0].opts).not.toHaveProperty(CHAT_CALL);
     expect(res).not.toHaveProperty('chatReplies');
   });
 

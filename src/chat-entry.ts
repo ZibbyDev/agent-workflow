@@ -30,6 +30,18 @@ export const CHAT_ENTRY_FLAG = 'chatEntry';
 /** Bounds on what one chat turn may carry into a prompt. The platform bounds
  * the conversation it sends too; these are the engine's own floor, so a caller
  * that forgot cannot blow a prompt up. */
+/**
+ * The invocation option that says THIS model call is a chat call: the declared
+ * chat-entry node answering a person on a chat turn (the call whose run log
+ * reads "mode: chat"). Set by the engine only (graph.ts), never by a node, and
+ * read by a strategy as a fact about the call. What a strategy may do with it
+ * is narrow: present the SAME tools in a lighter way for a turn that is a
+ * conversation (e.g. a codex chat call reaches workspace tools through the
+ * shared toolbox instead of holding a connection and schemas for each) — every
+ * tool stays reachable, and every other call is byte-identical.
+ */
+export const CHAT_CALL = 'chatCall';
+
 export const CHAT_MESSAGE_MAX = 16000;
 export const CHAT_CONVERSATION_MAX_ITEMS = 40;
 export const CHAT_CONVERSATION_MAX_CHARS = 24000;
