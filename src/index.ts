@@ -97,6 +97,10 @@ export type { ChatTurn, ChatLine, ChatAttachment } from './chat-entry.js';
 export { registerChatAttachmentResolver, getChatAttachmentResolver, resolveChatAttachments, chatAttachmentsUnreadable } from './chat-attachments.js';
 export type { ChatAttachmentResolver, ResolvedChatAttachments, ChatAttachmentImage, ChatAttachmentFile } from './chat-attachments.js';
 
+// A node's standing text, apart from the text of one call (standing-prompt.ts)
+export { STANDING_PROMPT, placeStandingPrompt } from './standing-prompt.js';
+export type { PromptPart } from './standing-prompt.js';
+
 // Skill registry
 export { registerSkill, getSkill, getSkillSource, hasSkill, getAllSkills, listSkillIds, clearSkills, skillEnabledForAgent, skillFragmentText, skillIntro, skillPromptText, searchedSkillIds, skillToolGuide, withToolGuide } from './skill-registry.js';
 

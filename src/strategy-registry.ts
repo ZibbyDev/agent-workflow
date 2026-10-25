@@ -20,6 +20,7 @@ import { repositoryRulesParts, preparedFoldersBlock } from './repository-rules.j
 import { runDeadlineSentence } from './run-deadline.js';
 import { unansweredLinesBlock } from './unanswered-lines.js';
 import { unavailableToolsBlock } from './unavailable-tools.js';
+import { placeStandingPrompt, STANDING_PROMPT } from './standing-prompt.js';
 
 // The registry lives on globalThis so it's SHARED across module instances.
 // In a workflow bundle, @zibby/agent-workflow can be loaded multiple times
@@ -452,6 +453,19 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
     for (const p of nodeParts) add(p.key, p.text);
   }
 
+  // THE NODE'S STANDING TEXT (standing-prompt.ts): handed over apart from this
+  // call's text, it is joined by the declared skills' pages below and placed by
+  // placeStandingPrompt at the end. Absent → every part goes to the prompt, as before.
+  const standing: { key: string; text: string }[] = [];
+  const standingText = typeof (options as any)[STANDING_PROMPT] === 'string' ? (options as any)[STANDING_PROMPT] : '';
+  if (standingText.trim()) standing.push({ key: 'node standing text', text: standingText });
+  const addStandingOrPrompt = (key: string, text: string) => {
+    if (!standing.length) return add(key, text);
+    let k = key;
+    for (let n = 2; standing.some((p) => p.key === k); n++) k = `${key} #${n}`;
+    standing.push({ key: k, text });
+  };
+
   const skills = finalOptions.skills || [];
   if (skills.length > 0 && !options.skipPromptFragments) {
     // ONLY inject the fragment of an integration that is actually connected.
@@ -512,7 +526,7 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
         return text ? { id, text } : null;
       })
       .filter(Boolean);
-    for (const f of fragments) add(`skill ${f.id}`, `\n\n${f.text}`);
+    for (const f of fragments) addStandingOrPrompt(`skill ${f.id}`, `\n\n${f.text}`);
   }
 
   // Store catalog (Stores v2) — if this node declares `stores`, the BACKEND
@@ -595,5 +609,12 @@ ${extraInstructions}
   }
 
   logger.debug(`[workflow] prompt length: ${enrichedPrompt.length} chars`);
-  return strategy.invoke(enrichedPrompt, { ...finalOptions, promptParts: parts });
+  if (!standing.length) return strategy.invoke(enrichedPrompt, { ...finalOptions, promptParts: parts });
+  const placed = placeStandingPrompt(strategy, standing, parts);
+  const { [STANDING_PROMPT]: _standing, ...callOptions } = finalOptions;
+  return strategy.invoke(placed.prompt, {
+    ...callOptions,
+    promptParts: placed.promptParts,
+    ...(placed.systemPrompt ? { systemPrompt: placed.systemPrompt, systemPromptParts: placed.systemPromptParts } : {}),
+  });
 }
