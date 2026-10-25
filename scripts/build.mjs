@@ -84,7 +84,6 @@ await build({
     '@zibby/*',
     // Runtime deps — keep external so consumer's node_modules supplies them
     'chalk',
-    'dotenv',
     'handlebars',
     'zod',
     'zod-to-json-schema',
