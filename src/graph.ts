@@ -1384,7 +1384,7 @@ export class WorkflowGraph {
       5000;
 
     const cwd = initialState.cwd || process.cwd();
-    loadDotenv({ path: join(cwd, '.env') });
+    loadDotenv({ path: join(cwd, '.env'), quiet: true });
 
     let config = initialState.config || {};
     if (!config || Object.keys(config).length === 0) {
