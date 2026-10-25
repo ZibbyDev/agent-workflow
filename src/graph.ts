@@ -25,7 +25,7 @@ import { withAgentContext } from './exec-context.js';
 import { ContextLoader } from './context-loader.js';
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { config as loadDotenv } from 'dotenv';
+import { loadEnvFile } from './load-env-file.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
 import Handlebars from 'handlebars';
@@ -1384,7 +1384,7 @@ export class WorkflowGraph {
       5000;
 
     const cwd = initialState.cwd || process.cwd();
-    loadDotenv({ path: join(cwd, '.env'), quiet: true });
+    loadEnvFile(join(cwd, '.env'));
 
     let config = initialState.config || {};
     if (!config || Object.keys(config).length === 0) {
