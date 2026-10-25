@@ -612,6 +612,21 @@ describe('the run\'s project folders and their access — a standing fact for ev
     expect(preparedFoldersBlock(four)).not.toContain('as it is on disk now');
   });
 
+  // run_log/magnum/2026-10-25-chat-turn-prepared-as-full-round: a person's chat
+  // turn on a shared worker has its folders in a companion container, reached
+  // with run_command. Told "the right path is its prepared copy in this run"
+  // alone, it would look in its own filesystem and find nothing.
+  it('folders in the run\'s folder container are said to be there, reached with run_command', () => {
+    const companion = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ ...JSON.parse(four.LOCAL_PROJECT_CONTEXT), attachment: 'companion' }) };
+    const block = preparedFoldersBlock(companion);
+    expect(block).toContain('These folders are not in your own filesystem: they are in this run\'s folder container');
+    expect(block).toContain('Reach them with run_command (run_workspaces)');
+    expect(block).toContain('- /Users/example/app/selfhosted → /workspace/local-project/tree/selfhosted (editable)');
+    // A run whose folders are in its own container is told exactly what it was before.
+    expect(preparedFoldersBlock(four)).not.toContain('run_command');
+    expect(preparedFoldersBlock(four).split('\n')).toHaveLength(2 + 4);
+  });
+
   it('no prepared folder, no claim: a run without folders gets no block', () => {
     expect(preparedFoldersBlock({})).toBe('');
     expect(preparedFoldersBlock({ LOCAL_PROJECT_CONTEXT: 'invalid' })).toBe('');

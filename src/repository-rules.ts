@@ -757,12 +757,25 @@ export const PREPARED_FOLDERS_HEADING = '## PROJECT FOLDERS AVAILABLE IN THIS RU
  * mounted. So when there are such files the sentence names the exception and
  * the files follow the folders, each once, in the runner's order.
  */
+/**
+ * WHERE THE RUN'S FOLDERS ARE (manifest `attachment`): 'companion' — in the
+ * run's folder container, not in this process's filesystem, reached with the
+ * run_workspaces server's `run_command` at the same directories (a person's
+ * chat turn on a shared worker, selfhosted local-projects/run-companion.js);
+ * '' — in this run's own container, as always. PURE.
+ */
+export function foldersAttachment(env: Record<string, string | undefined> = process.env): '' | 'companion' {
+  try { return JSON.parse(env?.LOCAL_PROJECT_CONTEXT || '{}')?.attachment === 'companion' ? 'companion' : ''; } catch { return ''; }
+}
+
 export function preparedFoldersBlock(env: Record<string, string | undefined> = process.env): string {
   let folders: PreparedWorkspace[] = [];
   try { folders = preparedWorkspaces(env).filter((w) => w.originalPath); } catch { return ''; }
   if (!folders.length) return '';
   const outside = [...new Set(preparedWorkspaces(env).flatMap((w) => w.ancestorRuleFiles))];
+  const companion = foldersAttachment(env) === 'companion';
   return [PREPARED_FOLDERS_HEADING,
+    ...(companion ? ['These folders are not in your own filesystem: they are in this run\'s folder container, at the directories below. Reach them with run_command (run_workspaces): a shell command run in one of those directories — read, search, git, edit, build, test.'] : []),
     (folders.some(w => w.pending) ? 'The left path is on the person\'s computer; the right path is its location in this run. Folders marked not prepared yet have no files there until you request them. ' : 'The left path is on the person\'s computer; the right path is its prepared copy in this run. Files beneath each left path are beneath the matching right path. ')
     + (outside.length ? 'Paths outside these folders are unavailable here, except the files listed after the folders. ' : 'Paths outside these folders are unavailable here. ')
     + 'The word after each folder is its access as this run was given it when it started: editable — files there can be changed and saved work can land in it; read-only — it is mounted read-only: it can be read, not changed, and saved work cannot land in it.',
@@ -775,8 +788,8 @@ export function preparedFoldersBlock(env: Record<string, string | undefined> = p
       + (w.liveDirectory ? `; as it is on disk now: ${w.liveDirectory} (${w.access}${w.uncommitted
         ? ('count' in w.uncommitted ? `; ${w.uncommitted.count} file${w.uncommitted.count === 1 ? '' : 's'} there not in the commit this run works from`
           : `; files not in the commit: not known (${w.uncommitted.notKnown})`) : ''})` : '')),
-    ...(folders.some((w) => w.liveDirectory) ? ['A folder\'s "as it is on disk now" directory is the person\'s folder itself, in this same container, with the folder\'s access: it includes files that are not in the commit this run works from, which may be another person\'s unfinished edits; it can change while it is read; in a read-only folder, secret files (.env) read as empty. Saved work is built from the folder\'s run directory, not from it; a file needed from it can be copied across with ordinary shell tools.'] : []),
-    ...(folders.some(w => w.pending) ? ['For a folder marked not prepared yet, call prepare_workspaces only when you need its files, using its id from list_workspaces. The tool returns ready paths and repository instructions; then use your native file and command tools there. A conversation that needs no files needs no preparation.'] : []),
+    ...(folders.some((w) => w.liveDirectory) ? [`A folder's "as it is on disk now" directory is the person's folder itself, in ${companion ? 'the same folder container' : 'this same container'}, with the folder\'s access: it includes files that are not in the commit this run works from, which may be another person\'s unfinished edits; it can change while it is read; in a read-only folder, secret files (.env) read as empty. Saved work is built from the folder\'s run directory, not from it; a file needed from it can be copied across with ordinary shell tools.`] : []),
+    ...(folders.some(w => w.pending) ? [`For a folder marked not prepared yet, call prepare_workspaces only when you need its files, using its id from list_workspaces. The tool returns ready paths and repository instructions; then ${companion ? 'reach them with run_command' : 'use your native file and command tools there'}. A conversation that needs no files needs no preparation.`] : []),
     ...(outside.length ? [
       'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',
       ...outside.map((f) => `- ${f}`),
