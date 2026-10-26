@@ -66,14 +66,19 @@ export {
   transientRetryBudget,
   transientBackoffMs,
   transientBackoffBaseMs,
+  transientKindOf,
+  capacityBackoffMs,
   PROVIDER_ERROR_KIND_CLASS,
   TRANSIENT_MESSAGE_PATTERNS,
+  CAPACITY_MESSAGE_PATTERNS,
+  CAPACITY_BACKOFF_STEPS,
+  CAPACITY_RETRIES,
   DEFAULT_TRANSIENT_RETRIES,
   MAX_TRANSIENT_RETRIES,
   DEFAULT_TRANSIENT_BACKOFF_MS,
   MAX_TRANSIENT_BACKOFF_MS,
 } from './failure-class.js';
-export type { FailureClass, AttemptDecision } from './failure-class.js';
+export type { FailureClass, AttemptDecision, TransientKind } from './failure-class.js';
 
 // State
 export { WorkflowState } from './state.js';

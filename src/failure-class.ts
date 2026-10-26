@@ -94,6 +94,23 @@ export const PROVIDER_ERROR_KIND_CLASS: Readonly<Record<string, FailureClass | '
  * returning `{success:false}`, and the engine's own `API stuck in loop` (a turn
  * that looped once will loop again, and it is the most expensive thing to redo).
  */
+/**
+ * UPSTREAM CAPACITY — the transient failures where the provider is up but has
+ * no room for us (at capacity, overloaded, rate limited). Waiting is what fixes
+ * these, and a capacity outage lasts minutes, so they get the long schedule
+ * (CAPACITY_BACKOFF_STEPS). Declared ONCE here; TRANSIENT_MESSAGE_PATTERNS
+ * includes them, so "is it transient" and "is it capacity" cannot drift.
+ */
+export const CAPACITY_MESSAGE_PATTERNS: readonly RegExp[] = Object.freeze([
+  /\boverloaded(?:_error)?\b/i,
+  /\brate[_ ]limit(?:_error|ed)?\b/i,
+  // codex's own words when the chosen model has no room (run 16db0ebd, 2026-10-12)
+  /\bselected model is at capacity\b/i,
+  // the two capacity statuses, only in an unmistakable HTTP context
+  /\b(?:HTTP|http_status|status(?:\s*code)?)[:= ]\s*(?:429|529)\b/i,
+  /\b(?:429\s+too many requests|529\s+overloaded)\b/i,
+]);
+
 export const TRANSIENT_MESSAGE_PATTERNS: readonly RegExp[] = Object.freeze([
   // ── the 42b920ae family: the model's stream went quiet mid-turn ──
   /stream idle timeout/i,
@@ -110,11 +127,8 @@ export const TRANSIENT_MESSAGE_PATTERNS: readonly RegExp[] = Object.freeze([
   // ── explicit timeouts the provider names ──
   /request timed out/i,
   /\brequest timeout\b/i,
-  // ── upstream capacity ──
-  /\boverloaded(?:_error)?\b/i,
-  /\brate[_ ]limit(?:_error|ed)?\b/i,
-  // codex's own words when the chosen model has no room (run 16db0ebd, 2026-10-12)
-  /\bselected model is at capacity\b/i,
+  // ── upstream capacity (declared above) ──
+  ...CAPACITY_MESSAGE_PATTERNS,
   // ── HTTP status, only in an unmistakable HTTP context (a bare "503" in
   //    someone's prose must not buy a retry) ──
   /\b(?:HTTP|http_status|status(?:\s*code)?)[:= ]\s*(?:429|5\d\d)\b/i,
@@ -240,6 +254,26 @@ export function classifyFailure(x: unknown): FailureClass {
   return 'deterministic';
 }
 
+/** Which kind of transient failure: the provider has no room for us, or the wire failed. */
+export type TransientKind = 'capacity' | 'network';
+
+/**
+ * For a failure {@link classifyFailure} calls transient: is it upstream
+ * CAPACITY (the provider's `rate_limit` kind, HTTP 429/529, or a
+ * CAPACITY_MESSAGE_PATTERNS shape) or a network/stream failure? Null for a
+ * failure that is not transient at all. The same evidence classifyFailure
+ * reads, no new guess.
+ */
+export function transientKindOf(x: unknown): TransientKind | null {
+  if (classifyFailure(x) !== 'transient') return null;
+  if (providerErrorKindOf(x) === 'rate_limit') return 'capacity';
+  const status = providerErrorStatusOf(x);
+  if (status === 429 || status === 529) return 'capacity';
+  const text = reasonText(x);
+  for (const re of CAPACITY_MESSAGE_PATTERNS) if (re.test(text)) return 'capacity';
+  return 'network';
+}
+
 /** Convenience predicate over {@link classifyFailure}. */
 export function isTransientFailure(x: unknown): boolean {
   return classifyFailure(x) === 'transient';
@@ -300,6 +334,32 @@ export function transientBackoffMs(
   return Math.max(1, Math.round(base * jitter));
 }
 
+/**
+ * THE CAPACITY SCHEDULE (founder, 2026-10-27): waits of 5 s, 10 s, 1 min,
+ * 5 min, 10 min — five retries after the first attempt — written as multiples
+ * of the backoff base (AGENT_TRANSIENT_BACKOFF_MS, default 5 s), so the one
+ * knob that turns waiting off (`0`, what tests use) turns this off too. A
+ * capacity outage lasts minutes (2026-10-14: one ticket's developer runs failed
+ * three times in a row on it; 2026-10-26: run 5946e2ca was cut off after 30
+ * minutes of work), and the network schedule's 5 s + 10 s cannot outlast it.
+ * The run's deadline still wins (createAttemptBudget `deadlineAtMs`).
+ */
+export const CAPACITY_BACKOFF_STEPS: readonly number[] = Object.freeze([1, 2, 12, 60, 120]);
+/** Retries a capacity failure may buy: one per scheduled wait. */
+export const CAPACITY_RETRIES = CAPACITY_BACKOFF_STEPS.length;
+
+/** Wait before capacity retry `n` (1-based), ±20% jitter like the network series; no cap below 10 min. */
+export function capacityBackoffMs(
+  n: number,
+  rand: () => number = Math.random,
+  baseMs: number = DEFAULT_TRANSIENT_BACKOFF_MS,
+): number {
+  if (!(baseMs > 0)) return 0;
+  const step = Math.min(CAPACITY_BACKOFF_STEPS.length, Math.max(1, Math.floor(Number(n) || 1)));
+  const jitter = 1 + (rand() - 0.5) * 0.4;
+  return Math.max(1, Math.round(baseMs * CAPACITY_BACKOFF_STEPS[step - 1] * jitter));
+}
+
 /** What the budget says to do after one failed attempt. */
 export interface AttemptDecision {
   /** Run the node again? */
@@ -314,6 +374,10 @@ export interface AttemptDecision {
   index?: number;
   /** Size of `paidBy`'s budget, for the log line. */
   of?: number;
+  /** Which transient kind set the wait (capacity = the long schedule). */
+  transientKind?: TransientKind;
+  /** Set when a retry was due but its wait would end past the run's deadline. */
+  stoppedBy?: 'deadline';
 }
 
 /**
@@ -334,40 +398,65 @@ export interface AttemptDecision {
  */
 export function createAttemptBudget(
   retries: number,
-  { env = process.env, rand = Math.random }: { env?: Record<string, any>; rand?: () => number } = {},
+  {
+    env = process.env, rand = Math.random, deadlineAtMs = null, now = Date.now,
+  }: {
+    env?: Record<string, any>;
+    rand?: () => number;
+    /** Epoch ms of the run's deadline (deadline-stop.ts). A retry whose wait would end at or past it is not made. */
+    deadlineAtMs?: number | null;
+    now?: () => number;
+  } = {},
 ) {
   const declaredMax = Math.max(0, Math.floor(Number(retries) || 0));
   const transientMax = transientRetryBudget(env);
+  // `AGENT_TRANSIENT_RETRIES=0` is an honest "off" for every transient retry;
+  // otherwise a capacity failure gets one retry per scheduled wait.
+  const capacityMax = transientMax === 0 ? 0 : CAPACITY_RETRIES;
   const backoffBase = transientBackoffBaseMs(env);
+  const deadline = Number.isFinite(deadlineAtMs as number) ? (deadlineAtMs as number) : null;
   let declaredUsed = 0;
   let transientUsed = 0;
+  // One jitter draw per wait, so `peek` and `next` name the same wait.
+  const jitters = new Map<string, number>();
+  const jitterFor = (key: string) => () => {
+    if (!jitters.has(key)) jitters.set(key, rand());
+    return jitters.get(key) as number;
+  };
+  const waitFor = (kind: TransientKind | null, index: number, key: string) => {
+    if (!kind) return 0;
+    return kind === 'capacity'
+      ? capacityBackoffMs(index, jitterFor(key), backoffBase)
+      : transientBackoffMs(index, jitterFor(key), backoffBase);
+  };
 
   /** The decision for one more failure, given what has been spent so far. Spends nothing. */
   const decide = (failure: unknown): AttemptDecision => {
     const failureClass = classifyFailure(failure);
+    const kind = failureClass === 'transient' ? transientKindOf(failure) : null;
+    let decision: AttemptDecision;
     if (declaredUsed < declaredMax) {
       const index = declaredUsed + 1;
-      return {
-        retry: true,
-        paidBy: 'declared',
-        delayMs: failureClass === 'transient' ? transientBackoffMs(index, rand, backoffBase) : 0,
-        failureClass,
-        index,
-        of: declaredMax,
+      decision = {
+        retry: true, paidBy: 'declared', delayMs: waitFor(kind, index, `declared:${index}`),
+        failureClass, index, of: declaredMax, ...(kind ? { transientKind: kind } : {}),
       };
-    }
-    if (failureClass === 'transient' && transientUsed < transientMax) {
+    } else if (kind && transientUsed < (kind === 'capacity' ? capacityMax : transientMax)) {
       const index = transientUsed + 1;
-      return {
-        retry: true,
-        paidBy: 'transient',
-        delayMs: transientBackoffMs(index, rand, backoffBase),
-        failureClass,
-        index,
-        of: transientMax,
+      decision = {
+        retry: true, paidBy: 'transient', delayMs: waitFor(kind, index, `transient:${index}`),
+        failureClass, index, of: kind === 'capacity' ? capacityMax : transientMax, transientKind: kind,
       };
+    } else {
+      return { retry: false, delayMs: 0, failureClass, ...(kind ? { transientKind: kind } : {}) };
     }
-    return { retry: false, delayMs: 0, failureClass };
+    // THE RUN'S DEADLINE WINS: at the deadline every model call is stopped
+    // (deadline-stop.ts), so an attempt that could only start after it is no
+    // attempt. The node's own ending (its fallback, or the failure) comes now.
+    if (deadline !== null && now() + decision.delayMs >= deadline) {
+      return { retry: false, delayMs: 0, failureClass, ...(kind ? { transientKind: kind } : {}), stoppedBy: 'deadline' };
+    }
+    return decision;
   };
 
   return {

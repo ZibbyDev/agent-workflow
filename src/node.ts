@@ -32,18 +32,27 @@ async function awaitRetry(
   decision: AttemptDecision,
   failure: unknown,
   aborted: () => boolean,
+  signal: AbortSignal | null = null,
 ): Promise<boolean> {
-  if (!decision.retry) return false;
+  if (!decision.retry) {
+    if (decision.stoppedBy === 'deadline') {
+      logger.warn(`[workflow] node '${nodeName}': not retrying — the next wait would end past the run's deadline`);
+    }
+    return false;
+  }
   // A stopped run never retries, however the failure was classified.
   if (aborted()) {
     logger.info(`[workflow] node '${nodeName}': run aborted — not retrying`);
     return false;
   }
   const why = (failure as any)?.message ?? String(failure ?? '');
+  const wait = decision.delayMs >= 60_000
+    ? `${Math.round(decision.delayMs / 60_000)} min`
+    : `${Math.round(decision.delayMs / 1000)}s`;
   if (decision.paidBy === 'transient') {
     logger.warn(
-      `[workflow] node '${nodeName}': TRANSIENT provider failure — ${why}. `
-      + `Retrying in ${Math.round(decision.delayMs / 1000)}s `
+      `[workflow] node '${nodeName}': TRANSIENT provider failure${decision.transientKind === 'capacity' ? ' (upstream capacity)' : ''} — ${why}. `
+      + `Retrying in ${wait} `
       + `(transient retry ${decision.index}/${decision.of}; the workspace is untouched, `
       + 'so files this node already wrote survive into the retry).',
     );
@@ -54,7 +63,14 @@ async function awaitRetry(
     );
   }
   if (decision.delayMs > 0) {
-    await new Promise((r) => setTimeout(r, decision.delayMs));
+    // A Stop (or the end of the grace after the deadline) ends the wait at
+    // once — a 10-minute capacity wait must not hold a stopped run.
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); signal?.removeEventListener?.('abort', done); resolve(); };
+      const timer = setTimeout(done, decision.delayMs);
+      if (signal?.aborted) done();
+      else signal?.addEventListener?.('abort', done, { once: true });
+    });
     if (aborted()) {
       logger.info(`[workflow] node '${nodeName}': run aborted during backoff — not retrying`);
       return false;
@@ -127,6 +143,15 @@ export class Node {
     // executed without a WorkflowState (unit tests, `zibby test`) is simply
     // never "aborted" rather than throwing.
     const _aborted = () => _getState('_signal')?.aborted === true;
+    const _stepSignal = () => {
+      const sig = _getState('_signal');
+      return sig && typeof sig.addEventListener === 'function' ? sig as AbortSignal : null;
+    };
+    // The run's deadline, as the graph armed it (graph.ts nodeContext
+    // `runDeadlineAtMs`): no retry is started whose wait ends past it.
+    const _budgetOptions = () => ({
+      deadlineAtMs: Number.isFinite(context?.runDeadlineAtMs) ? context.runDeadlineAtMs : null,
+    });
 
     if (typeof this.customExecute === 'function') {
       logger.debug(`[workflow] node '${this.name}': custom execute (skipping LLM)`);
@@ -167,7 +192,7 @@ export class Node {
       // POSITIVELY identified as transient may buy extra attempts on top, with
       // backoff. `retries: 0` (the default) therefore still means "no retry on
       // a bug" and now also means "a dead stream does not destroy the work".
-      const budget = createAttemptBudget(this.retries);
+      const budget = createAttemptBudget(this.retries, _budgetOptions());
       let lastFailure: any = null;
       /**
        * The THROWN error, kept beside the flattened failure result. It carries
@@ -233,7 +258,7 @@ export class Node {
         // structured provider fields). Either way ONE call, ONE decider.
         const evidence = lastThrown ?? lastFailure?.error;
         const decision = budget.next(evidence);
-        if (!await awaitRetry(this.name, decision, evidence, _aborted)) break;
+        if (!await awaitRetry(this.name, decision, evidence, _aborted, _stepSignal())) break;
       }
       // How many attempts this node ACTUALLY made — the run's error line quotes
       // it, and `retries + 1` stopped being that number the moment a transient
@@ -286,7 +311,7 @@ export class Node {
     }
 
     // Same ONE budget as the custom-execute path above (createAttemptBudget).
-    const llmBudget = createAttemptBudget(this.retries);
+    const llmBudget = createAttemptBudget(this.retries, _budgetOptions());
     let lastError = null;
     for (;;) {
       try {
@@ -399,7 +424,7 @@ export class Node {
       } catch (error) {
         lastError = error;
         const decision = llmBudget.next(error);
-        if (!await awaitRetry(this.name, decision, error, _aborted)) break;
+        if (!await awaitRetry(this.name, decision, error, _aborted, _stepSignal())) break;
       }
     }
 

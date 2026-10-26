@@ -70,7 +70,7 @@ describe('context.willRetry — a node asks the loop before it falls back', () =
 
   it('once the transient budget is spent, the node\'s own fallback is the ending', async () => {
     const r = await run(99, CAPACITY);
-    expect(r.runs, '1 attempt + 2 transient retries, then the fallback').toBe(3);
+    expect(r.runs, '1 attempt + 5 capacity retries, then the fallback').toBe(6);
     expect(r.result?.success).toBe(true);
     expect(JSON.stringify(r.result)).toContain('"fallback":true');
   });

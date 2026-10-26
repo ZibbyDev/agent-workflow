@@ -2023,6 +2023,13 @@ export class WorkflowGraph {
         // conversation (see `replyToPerson` above). Absent on every other run.
         ...(chatTurn ? { replyToPerson: (text: string) => replyToPerson(currentNode, text) } : {}),
       };
+      // The deadline this run armed (deadlineClock above), for Node.execute's
+      // retry budget: no retry starts whose wait would end past it. Read from
+      // the clock itself, never re-derived from env (one reading). Non-enumerable,
+      // so it never reaches a node that spreads its context into state.
+      Object.defineProperty(nodeContext, 'runDeadlineAtMs', {
+        value: deadlineClock.atMs, configurable: true, writable: true, enumerable: false,
+      });
 
       try {
         const nodeSkillMw = (node.config?.skills || []).map(id => _skillMiddleware.get(id)).filter(Boolean);
