@@ -342,36 +342,54 @@ export function createAttemptBudget(
   let declaredUsed = 0;
   let transientUsed = 0;
 
+  /** The decision for one more failure, given what has been spent so far. Spends nothing. */
+  const decide = (failure: unknown): AttemptDecision => {
+    const failureClass = classifyFailure(failure);
+    if (declaredUsed < declaredMax) {
+      const index = declaredUsed + 1;
+      return {
+        retry: true,
+        paidBy: 'declared',
+        delayMs: failureClass === 'transient' ? transientBackoffMs(index, rand, backoffBase) : 0,
+        failureClass,
+        index,
+        of: declaredMax,
+      };
+    }
+    if (failureClass === 'transient' && transientUsed < transientMax) {
+      const index = transientUsed + 1;
+      return {
+        retry: true,
+        paidBy: 'transient',
+        delayMs: transientBackoffMs(index, rand, backoffBase),
+        failureClass,
+        index,
+        of: transientMax,
+      };
+    }
+    return { retry: false, delayMs: 0, failureClass };
+  };
+
   return {
     get attemptsMade() { return 1 + declaredUsed + transientUsed; },
     get transientUsed() { return transientUsed; },
     get transientMax() { return transientMax; },
     /** Record one failure and say whether to run again. */
     next(failure: unknown): AttemptDecision {
-      const failureClass = classifyFailure(failure);
-      if (declaredUsed < declaredMax) {
-        declaredUsed += 1;
-        return {
-          retry: true,
-          paidBy: 'declared',
-          delayMs: failureClass === 'transient' ? transientBackoffMs(declaredUsed, rand, backoffBase) : 0,
-          failureClass,
-          index: declaredUsed,
-          of: declaredMax,
-        };
-      }
-      if (failureClass === 'transient' && transientUsed < transientMax) {
-        transientUsed += 1;
-        return {
-          retry: true,
-          paidBy: 'transient',
-          delayMs: transientBackoffMs(transientUsed, rand, backoffBase),
-          failureClass,
-          index: transientUsed,
-          of: transientMax,
-        };
-      }
-      return { retry: false, delayMs: 0, failureClass };
+      const decision = decide(failure);
+      if (decision.paidBy === 'declared') declaredUsed += 1;
+      else if (decision.paidBy === 'transient') transientUsed += 1;
+      return decision;
+    },
+    /**
+     * What `next` WOULD decide for this failure, spending nothing. A node that
+     * catches its own model's error asks this before turning the error into a
+     * result of its own: when the answer is "retry", it rethrows and this loop
+     * runs it again; when it is not, the node's own fallback is the ending, as
+     * before. One decider, so the node and the loop can never disagree.
+     */
+    peek(failure: unknown): AttemptDecision {
+      return decide(failure);
     },
   };
 }

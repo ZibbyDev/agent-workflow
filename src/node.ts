@@ -177,6 +177,24 @@ export class Node {
        * instead of throwing, in which case the error string is all there is.
        */
       let lastThrown: unknown = null;
+      // A NODE THAT CATCHES ITS OWN MODEL'S ERROR ASKS THIS LOOP FIRST.
+      // `context.willRetry(error)` is true when THIS loop would run the node
+      // again for that failure (same decider, nothing spent). A node that turns
+      // a model error into a result of its own ("the run failed, here is what
+      // was saved") rethrows instead while the answer is true, so a provider
+      // that is at capacity for a minute is retried here rather than reported
+      // as the member's failure — and keeps its own ending once the budget is
+      // spent. Seen live 2026-10-26: a developer run cut off after 30 minutes by
+      // "Selected model is at capacity" was reported failed by its node; the
+      // transient budget below never saw the error
+      // (run_log/developer/2026-10-27-capacity-error-not-retried/).
+      // Non-enumerable: a node that spreads its context does not copy it.
+      if (context && typeof context === 'object') {
+        Object.defineProperty(context, 'willRetry', {
+          value: (failure: unknown) => !_aborted() && budget.peek(failure).retry,
+          configurable: true, writable: true, enumerable: false,
+        });
+      }
       for (;;) {
         try {
           const result = await this.customExecute(context);
