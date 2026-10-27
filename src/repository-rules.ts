@@ -697,8 +697,11 @@ export function preparedWorkspaces(env: Record<string, string | undefined> = pro
   const out = entries
     .map((w: any) => ({
       directory: typeof w.directory === 'string' ? w.directory : typeof w.path === 'string' ? w.path : '',
-      ...(w.status === 'pending' ? { pending: true } : {}),
-      ...(w.status === 'selectable' ? { selectable: true } : {}),
+      // A repository the run was not started in, with a place mounted for it
+      // (`preparable`): prepare_workspaces makes it an editable work area at
+      // `directory`, exactly as a folder not prepared yet — so it reads as one.
+      ...(w.status === 'pending' || (w.status === 'selectable' && w.preparable === true) ? { pending: true } : {}),
+      ...(w.status === 'selectable' && w.preparable !== true ? { selectable: true } : {}),
       originalPath: abs(w.originalPath) && normalize(w.originalPath) === w.originalPath ? w.originalPath : '',
       folderPath: abs(w.folderPath) && normalize(w.folderPath) === w.folderPath ? w.folderPath : '',
       marked: w.isPrimary === true,
@@ -794,7 +797,28 @@ export function preparedFoldersBlock(env: Record<string, string | undefined> = p
       'These files are in this run too, each at the same path as on the person\'s computer and read-only — the workspace\'s rule files and the documents they link to:',
       ...outside.map((f) => `- ${f}`),
     ] : []),
+    ...teammateLines(env),
   ].join('\n');
+}
+
+/**
+ * WHO ELSE WAS WORKING WHEN THIS RUN STARTED — the runner's start-time copy of
+ * the list list_running_agents answers (manifest `teammates`; selfhosted
+ * execution-context.js withTeammates): each run's role, ticket, the
+ * repositories it works in, since when. Facts only; [] when the runner gave
+ * none or listed nobody.
+ */
+function teammateLines(env: Record<string, string | undefined>): string[] {
+  let t: any;
+  try { t = JSON.parse(env?.LOCAL_PROJECT_CONTEXT || '{}')?.teammates; } catch { return []; }
+  const runs = Array.isArray(t?.runs) ? t.runs.filter((r: any) => r && typeof r.executionId === 'string' && r.executionId) : [];
+  if (!runs.length) return [];
+  const one = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').slice(0, 80);
+  return [`Other runs of the project that were active when this run started (${one(t.readAt) || 'time not given'}; list_running_agents lists them as they are now):`,
+    ...runs.slice(0, 12).map((r: any) => `- ${one(r.workflowType) || 'a run'} ${r.executionId.slice(0, 36)}`
+      + (r.ticketKey ? `, ticket ${one(r.ticketKey)}` : '') + (r.since ? `, since ${one(r.since)}` : '')
+      + (Array.isArray(r.repositories) && r.repositories.length ? `, working in ${r.repositories.slice(0, 8).map(one).join(', ')}` : '')),
+    ...(t.more ? ['(more are active; list_running_agents lists them all)'] : [])];
 }
 
 /**
