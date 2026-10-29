@@ -115,6 +115,26 @@ describe('rule-file walk read ahead', () => {
     expect(ahead.map((p) => p.text).join('\n')).not.toContain('ignored by git');
   });
 
+  // A project tree wider than the walk's bound (500 folders scanned): the
+  // read-ahead listed 1000 folders per top in no particular order, and the
+  // walk still listed ~800 folders one at a time behind it in a run container
+  // (2026-10-29). It now lists what the walk lists, level by level.
+  it('a tree wider than the walk\'s bound is read ahead in the walk\'s own order', async () => {
+    const ws = join(base, 'workspace');
+    const big = join(ws, 'big');
+    gitInit(big);
+    write(join(big, 'CLAUDE.md'), 'big rules');
+    for (let a = 0; a < 12; a++) for (let b = 0; b < 12; b++) for (let c = 0; c < 12; c++) mkdirSync(join(big, `a${a}`, `b${b}`, `c${c}`), { recursive: true });
+    write(join(big, 'a0', 'b0', 'CLAUDE.md'), 'deep rules');
+    const args = { workspace: ws, env: {}, strategy: {} };
+    const alone = repositoryRulesParts(args);
+    calls.readdir = 0;
+    const ahead = await repositoryRulesPartsAsync(args);
+    expect(ahead).toEqual(alone);
+    expect(ahead.map((p) => p.text).join('\n')).toContain('a0/b0/CLAUDE.md');
+    expect(calls.readdir).toBeLessThan(10);
+  });
+
   it('a workspace that cannot be read gives the same answer either way', async () => {
     const args = { workspace: join(base, 'missing'), env: {}, strategy: {} };
     expect(await repositoryRulesPartsAsync(args)).toEqual(repositoryRulesParts(args));

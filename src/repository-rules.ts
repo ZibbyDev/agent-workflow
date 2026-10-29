@@ -1197,60 +1197,70 @@ async function askedAhead(roots: RuleRoot[], args: RulesArgs, listings: ListingC
 }
 
 /** How many folders below each top are read ahead, and how deep: the walk's own bounds, one level further (the rule lookup lists the walk's deepest folders too). */
-const PREFETCH_MAX_DIRS = 2 * MAX_DIRS_SCANNED;
 const PREFETCH_CONCURRENCY = 16;
 
 /**
- * Lists the real folders under each top, breadth first, in parallel, into
- * `listings` — the folders the walk and the rule lookup will list, by the
- * walk's own skips (hidden and dependency folders, symlinks) and bounds. A
- * folder git ignores is read too (the walk asks git per level; reading it
- * costs a parallel listing, never a different answer). A folder that cannot be
- * listed is left out, so the walk asks for it itself.
+ * Lists, in parallel, the folders the walk from each top will list, into
+ * `listings`: the walk's own order (breadth first, names sorted), skips
+ * (hidden and dependency folders, symlinks) and bounds (MAX_DIRS_SCANNED
+ * scanned, MAX_DEEPER_DEPTH levels), plus every folder a scanned level finds
+ * (the walk looks in each for `.git`, and in the last for rule files). A folder git ignores is read too
+ * — the walk asks git per level; reading it costs a parallel listing, never a
+ * different answer — so a walk told what git ignores lists a subset of these,
+ * give or take the folders past its bound. A folder that cannot be listed is
+ * left out, so the walk asks for it itself.
+ *
+ * Mirroring the walk matters: the earlier read-ahead spent a shared budget of
+ * 1000 folders per top in no particular order, and a workspace holding a large
+ * project tree still listed ~800 folders one at a time behind it (0.8 s in a
+ * run container, 2026-10-29).
  */
 async function prefetchListings(tops: string[], listings: ListingCache): Promise<void> {
-  const queue: Array<{ dir: string; depth: number; top: string }> = [];
-  const listedPerTop = new Map<string, number>();
-  for (const top of [...new Set(tops.map((t) => resolve(t)))]) {
-    if (isRealDir(top)) queue.push({ dir: top, depth: 0, top });
-  }
-  const seen = new Set<string>();
-  const listOne = async ({ dir, depth, top }: { dir: string; depth: number; top: string }): Promise<void> => {
-    // Each top walks its own tree to its own depth; a folder another top
-    // already listed is not listed again, only followed.
-    const key = `${top}\0${dir}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const count = listedPerTop.get(top) || 0;
-    if (count >= PREFETCH_MAX_DIRS) return;
-    listedPerTop.set(top, count + 1);
-    let listing = listings.get(dir);
-    if (listing === undefined) {
-      let entries: Dirent[];
-      try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
-      listing = listings.get(dir) ?? new Map(entries.map((e) => [e.name, e] as [string, Dirent]));
-      listings.set(dir, listing);
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const slot = async () => {
+    if (active >= PREFETCH_CONCURRENCY) await new Promise<void>((r) => waiting.push(r));
+    active += 1;
+  };
+  const free = () => { active -= 1; const next = waiting.shift(); if (next) next(); };
+  const inFlight = new Map<string, Promise<void>>();
+  const list = (dir: string): Promise<void> => {
+    if (listings.has(dir)) return Promise.resolve();
+    let pending = inFlight.get(dir);
+    if (!pending) {
+      pending = (async () => {
+        await slot();
+        try {
+          const entries = await readdir(dir, { withFileTypes: true });
+          if (!listings.has(dir)) listings.set(dir, new Map(entries.map((e) => [e.name, e] as [string, Dirent])));
+        } catch { /* left for the walk */ } finally { free(); }
+      })();
+      inFlight.set(dir, pending);
     }
-    if (!listing || depth >= MAX_DEEPER_DEPTH) return;
-    for (const e of [...listing.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-      if (!e.isDirectory() || e.isSymbolicLink() || e.name.startsWith('.') || DEPENDENCY_DIRS.has(e.name)) continue;
-      queue.push({ dir: join(dir, e.name), depth: depth + 1, top });
+    return pending;
+  };
+  const sortedChildren = (dir: string): string[] => {
+    const listing = listings.get(dir);
+    if (!listing) return [];
+    return [...listing.values()]
+      .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith('.') && !DEPENDENCY_DIRS.has(e.name))
+      .map((e) => e.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((name) => join(dir, name));
+  };
+  const walkFrom = async (top: string): Promise<void> => {
+    await list(top);
+    let level = [top];
+    let scanned = 0;
+    for (let depth = 0; level.length && depth < MAX_DEEPER_DEPTH && scanned < MAX_DIRS_SCANNED; depth++) {
+      const scan = level.slice(0, MAX_DIRS_SCANNED - scanned);
+      scanned += scan.length;
+      level = scan.flatMap(sortedChildren);
+      // Every folder a scanned level finds is listed, not only the ones the
+      // next level scans: the walk looks in each for `.git` (a repository of
+      // its own) and the last level found for rule files.
+      await Promise.all(level.map(list));
     }
   };
-  // Breadth first, PREFETCH_CONCURRENCY listings in flight; each finished
-  // listing lets the next queued folders start.
-  await new Promise<void>((done) => {
-    let active = 0;
-    const pump = () => {
-      while (active < PREFETCH_CONCURRENCY && queue.length) {
-        const item = queue.shift()!;
-        active += 1;
-        listOne(item).catch(() => {}).finally(() => { active -= 1; pump(); });
-      }
-      if (active === 0 && !queue.length) done();
-    };
-    pump();
-  });
+  await Promise.all([...new Set(tops.map((t) => resolve(t)))].filter((top) => isRealDir(top)).map(walkFrom));
 }
 
 /** The folders whose rule files are collected: the prepared ones, the working directory, the named ones, and checkouts found below it. */
