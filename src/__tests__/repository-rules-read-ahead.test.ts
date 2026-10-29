@@ -17,17 +17,25 @@ import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const calls = vi.hoisted(() => ({ readdir: 0 }));
+const calls = vi.hoisted(() => ({ readdir: 0, gitWaited: 0, gitAhead: 0 }));
 vi.mock('fs', async (importOriginal) => {
   const real: any = await importOriginal();
   const readdirSync = (...args: any[]) => { calls.readdir += 1; return real.readdirSync(...args); };
   return { ...real, default: { ...real, readdirSync }, readdirSync };
 });
+// The git questions: asked one at a time, waiting (spawnSync), or ahead, several at once (spawn).
+vi.mock('child_process', async (importOriginal) => {
+  const real: any = await importOriginal();
+  const asksGit = (cmd: string, args: any) => cmd === 'git' && Array.isArray(args) && args.includes('check-ignore');
+  const spawnSync = (cmd: string, args: any, ...rest: any[]) => { if (asksGit(cmd, args)) calls.gitWaited += 1; return real.spawnSync(cmd, args, ...rest); };
+  const spawn = (cmd: string, args: any, ...rest: any[]) => { if (asksGit(cmd, args)) calls.gitAhead += 1; return real.spawn(cmd, args, ...rest); };
+  return { ...real, default: { ...real, spawnSync, spawn }, spawnSync, spawn };
+});
 
 const { repositoryRulesParts, repositoryRulesPartsAsync } = await import('../repository-rules.js');
 
 let base: string;
-beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'rules-ahead-')); calls.readdir = 0; });
+beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'rules-ahead-')); calls.readdir = 0; calls.gitWaited = 0; calls.gitAhead = 0; });
 afterEach(() => { rmSync(base, { recursive: true, force: true }); });
 
 const write = (path: string, text: string) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); };
@@ -87,6 +95,24 @@ describe('rule-file walk read ahead', () => {
     // (.cursor/rules), which the lookup lists by name.
     expect(alone).toBeGreaterThan(20);
     expect(ahead).toBeLessThan(5);
+  });
+
+  // The collection asks git, per repository and per level, which folders and
+  // rule files it ignores, waiting for each answer: ~60 git processes one
+  // after another for a workspace holding a large project tree (2026-10-29).
+  // They are asked ahead, one process per repository, several at once.
+  it('git is asked once per repository, ahead, instead of once per level while the walk waits', async () => {
+    const args = workspace();
+    repositoryRulesParts(args);
+    const waitedAlone = calls.gitWaited;
+    calls.gitWaited = 0;
+    const ahead = await repositoryRulesPartsAsync(args);
+    expect(waitedAlone).toBeGreaterThan(3);
+    expect(calls.gitWaited).toBe(0);
+    expect(calls.gitAhead).toBeGreaterThan(0);
+    expect(calls.gitAhead).toBeLessThanOrEqual(3); // tree, app, the clone
+    expect(ahead).toEqual(repositoryRulesParts(args));
+    expect(ahead.map((p) => p.text).join('\n')).not.toContain('ignored by git');
   });
 
   it('a workspace that cannot be read gives the same answer either way', async () => {

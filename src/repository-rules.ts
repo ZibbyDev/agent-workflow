@@ -70,7 +70,7 @@ import { lstatSync, readdirSync, openSync, readSync, closeSync, existsSync, cons
 import { readdir } from 'fs/promises';
 import type { Dirent } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute, sep, basename, normalize } from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { markStartup } from './startup-marks.js';
 
 /**
@@ -480,8 +480,8 @@ export function ruleLocationOf(path: string): { governs: string; name: string; o
  * parent repository. The caller's GIT_DIR-style variables are dropped so the
  * question is about `repoRoot` and nothing else.
  */
-function gitIgnoredPaths(repoRoot: string, relPaths: string[]): Set<string> | null {
-  if (!relPaths.length) return new Set();
+/** The one `git check-ignore` question both askers send (gitIgnoredPaths, gitIgnoredPathsAsync). */
+function gitIgnoreQuestion(repoRoot: string, relPaths: string[]): { args: string[]; env: Record<string, string>; input: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === 'string' && !/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|CONFIG_PARAMETERS|CONFIG_COUNT)$/.test(k)) env[k] = v;
@@ -490,17 +490,51 @@ function gitIgnoredPaths(repoRoot: string, relPaths: string[]): Set<string> | nu
   env.GIT_TERMINAL_PROMPT = '0';
   env.GIT_OPTIONAL_LOCKS = '0';
   env.GIT_PAGER = 'cat';
+  return { args: ['-c', 'core.fsmonitor=false', '-C', repoRoot, 'check-ignore', '-z', '--stdin'], env,
+    input: relPaths.map((p) => p.split(sep).join('/')).join('\0') + '\0' };
+}
+
+/** check-ignore's answer: 0 = some ignored, 1 = none ignored, anything else = no answer (null). */
+function gitIgnoreAnswer(status: number | null, stdout: string): Set<string> | null {
+  if (status !== 0 && status !== 1) return null;
+  const out = new Set<string>();
+  for (const p of stdout.split('\0')) if (p) out.add(p);
+  return out;
+}
+
+function gitIgnoredPaths(repoRoot: string, relPaths: string[]): Set<string> | null {
+  if (!relPaths.length) return new Set();
+  const { args, env, input } = gitIgnoreQuestion(repoRoot, relPaths);
   try {
-    const res = spawnSync('git', ['-c', 'core.fsmonitor=false', '-C', repoRoot, 'check-ignore', '-z', '--stdin'], {
-      input: relPaths.map((p) => p.split(sep).join('/')).join('\0') + '\0',
-      env, timeout: GIT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    // check-ignore: 0 = some ignored, 1 = none ignored, anything else = no answer.
-    if (res.error || (res.status !== 0 && res.status !== 1)) return null;
-    const out = new Set<string>();
-    for (const p of String(res.stdout || '').split('\0')) if (p) out.add(p);
-    return out;
+    const res = spawnSync('git', args, { input, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'] });
+    if (res.error) return null;
+    return gitIgnoreAnswer(res.status, String(res.stdout || ''));
   } catch { return null; }
+}
+
+/** gitIgnoredPaths without blocking: the same question and answer, so several repositories can be asked at once. */
+function gitIgnoredPathsAsync(repoRoot: string, relPaths: string[]): Promise<Set<string> | null> {
+  if (!relPaths.length) return Promise.resolve(new Set());
+  const { args, env, input } = gitIgnoreQuestion(repoRoot, relPaths);
+  return new Promise((done) => {
+    let stdout = '';
+    let size = 0;
+    let settled = false;
+    const finish = (answer: Set<string> | null) => { if (!settled) { settled = true; done(answer); } };
+    try {
+      const child = spawn('git', args, { env, timeout: GIT_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'ignore'] });
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024) { child.kill(); finish(null); return; }
+        stdout += chunk;
+      });
+      child.on('error', () => finish(null));
+      child.on('close', (status, signal) => finish(signal ? null : gitIgnoreAnswer(status, stdout)));
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    } catch { finish(null); }
+  });
 }
 
 /**
@@ -509,8 +543,8 @@ function gitIgnoredPaths(repoRoot: string, relPaths: string[]): Set<string> | nu
  * root of its own), and a repository git could not answer for is not retried.
  */
 type IgnoreAsker = (repoRoot: string, relPaths: string[]) => Set<string> | null;
-function ignoreAsker(): IgnoreAsker {
-  const answered = new Map<string, Map<string, boolean> | null>();
+type IgnoreAnswers = Map<string, Map<string, boolean> | null>;
+function ignoreAsker(answered: IgnoreAnswers = new Map()): IgnoreAsker {
   return (repoRoot, relPaths) => {
     let known = answered.get(repoRoot);
     if (known === null) return null;
@@ -854,7 +888,8 @@ export interface RuleRoot {
  * is still one file) — is listed once, in full if either root sends it in
  * full. Never throws.
  */
-export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity, listings = new Map() }: { identity?: PathIdentity; listings?: ListingCache } = {}): RuleFile[] {
+export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity, listings = new Map(), ask = ignoreAsker(), questionsOnly = false }:
+  { identity?: PathIdentity; listings?: ListingCache; ask?: IgnoreAsker; questionsOnly?: boolean } = {}): RuleFile[] {
   type Found = Omit<RuleFile, 'full' | 'summary' | 'text' | 'bytes'> & { onDemand: boolean; primary: boolean };
   const found = new Map<string, Found>();
   const byPlace = (f: Found) => sendsInFull({ origin: f.origin, primary: f.primary });
@@ -867,7 +902,6 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
     // Otherwise the first path it was reached by is the one the run is told.
     if (!had || (!byPlace(had) && byPlace(f))) found.set(key, f);
   };
-  const ask = ignoreAsker();
   // Every folder this collection looks at is listed once and the listing is
   // reused (directoryListing): the walk, its `.git` check and the rule-file
   // lookup each used to ask the filesystem separately. The caller may hand
@@ -915,6 +949,8 @@ export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdent
       add(f);
     }
   }
+  // A rehearsal only collects git's questions (askedAhead); no file is read.
+  if (questionsOnly) return [];
   const out: RuleFile[] = [];
   for (const { onDemand, primary, ...f } of found.values()) {
     let bytes = 0;
@@ -1105,7 +1141,59 @@ export async function repositoryRulesPartsAsync(args: RulesArgs = {}): Promise<P
   // first model call waited 3.7-7.3 s for its rule files on a loaded box
   // (2026-10-28); these marks say which part.
   markStartup('rule folders read ahead');
-  return rulesPartsWith(args, listings);
+  try {
+    const roots = ruleRoots(args, listings);
+    markStartup('rule folders walked');
+    // Each root's own folders, read ahead too: a checkout found below the
+    // working directory is walked to its own depth, below what was read above.
+    try { await prefetchListings(roots.map((r) => r.dir), listings); } catch { /* the walk reads them itself */ }
+    const ask = await askedAhead(roots, args, listings);
+    markStartup('rule ignores asked');
+    return partsOf(args, roots, listings, ask);
+  } catch {
+    return [];
+  } finally {
+    markStartup('repository rules read');
+  }
+}
+
+/** How many repositories git is asked about at once (askedAhead). */
+const IGNORE_ASK_CONCURRENCY = 4;
+
+/**
+ * The collection's git questions, asked before it runs, several repositories
+ * at once. The collection asks git which folders and rule files each
+ * repository ignores one level at a time, waiting for each answer: ~60 git
+ * processes, one after another, for a workspace holding a large project tree
+ * (1.0 of 1.3 s on the Mac's own disk; the first model call waited 3.7-7.3 s
+ * for its rule files in a run container on a loaded box, 2026-10-28). A
+ * rehearsal of the same collection, answering "nothing ignored", gathers every
+ * question it could ask (a superset: it also descends what git would ignore);
+ * each repository is asked them in one process; the collection then reads the
+ * answers. A question the rehearsal missed, or a repository git could not
+ * answer for here, is asked by the collection itself, as before — the answers
+ * are git's own either way.
+ */
+async function askedAhead(roots: RuleRoot[], args: RulesArgs, listings: ListingCache): Promise<IgnoreAsker> {
+  const questions = new Map<string, Set<string>>();
+  const rehearse: IgnoreAsker = (repo, rels) => {
+    let asked = questions.get(repo);
+    if (!asked) { asked = new Set(); questions.set(repo, asked); }
+    for (const p of rels) asked.add(p.split(sep).join('/'));
+    return new Set();
+  };
+  collectRepositoryRules(roots, { identity: args.identity || pathIdentity, listings, ask: rehearse, questionsOnly: true });
+  const answers: IgnoreAnswers = new Map();
+  const pending = [...questions].filter(([, rels]) => rels.size > 0);
+  await Promise.all(Array.from({ length: Math.min(IGNORE_ASK_CONCURRENCY, pending.length) }, async () => {
+    for (let next = pending.shift(); next; next = pending.shift()) {
+      const [repo, rels] = next;
+      const list = [...rels];
+      const ignored = await gitIgnoredPathsAsync(repo, list);
+      if (ignored) answers.set(repo, new Map(list.map((p) => [p, ignored.has(p)])));
+    }
+  }));
+  return ignoreAsker(answers);
 }
 
 /** How many folders below each top are read ahead, and how deep: the walk's own bounds, one level further (the rule lookup lists the walk's deepest folders too). */
@@ -1165,49 +1253,61 @@ async function prefetchListings(tops: string[], listings: ListingCache): Promise
   });
 }
 
+/** The folders whose rule files are collected: the prepared ones, the working directory, the named ones, and checkouts found below it. */
+function ruleRoots(args: RulesArgs, listings: ListingCache): RuleRoot[] {
+  const { env = process.env, identity = pathIdentity } = args;
+  const { cwd, named } = rulesInputs(args);
+  // An entry listed only for choosing has no files to read rules from.
+  const prepared = preparedWorkspaces(env).filter((w) => !w.selectable);
+  const asRoot = (w: PreparedWorkspace): RuleRoot => ({ dir: w.directory, declared: true, primary: w.primary, originalPath: w.originalPath, ancestors: w.ancestorRuleFiles });
+  // A checkout found inside a prepared folder IS that folder (a worktree has
+  // a `.git` too): it keeps that folder's standing, primary or not. "Inside"
+  // is asked of the folders themselves, not of their spelling: the same
+  // folder mounted at a second path (the runner's id mount beside its
+  // arranged path) is that prepared folder too, not another checkout whose
+  // rules are sent again.
+  const idOf = (d: string) => { try { return identity(d); } catch { return null; } };
+  const preparedIds = new Set(prepared.map((w) => idOf(w.directory)).filter((id): id is string => !!id));
+  const isPreparedFolder = (d: string) => {
+    if (!preparedIds.size) return false;
+    for (let cur = resolve(d), i = 0; i < 64; i++) {
+      const id = idOf(cur);
+      if (id && preparedIds.has(id)) return true;
+      const parent = dirname(cur);
+      if (parent === cur) return false;
+      cur = parent;
+    }
+    return false;
+  };
+  const inPrepared = (d: string) => prepared.some((w) => resolve(d) === resolve(w.directory) || resolve(d).startsWith(resolve(w.directory) + sep))
+    || isPreparedFolder(d);
+  return [
+    ...prepared.filter((w) => w.primary).map(asRoot),
+    { dir: cwd, declared: false },
+    ...prepared.filter((w) => !w.primary).map(asRoot),
+    ...named.map((dir) => ({ dir, declared: true })),
+    // A clone tool may have created this checkout in an earlier node. Every
+    // invocation discovers those repositories from the same bounded,
+    // symlink-free workspace walk, without template-specific plumbing.
+    ...subfolders(cwd, true, listings).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
+      .map((dir) => ({ dir, declared: true })),
+  ];
+}
+
+/** The parts for the rule files collected from `roots`. */
+function partsOf(args: RulesArgs, roots: RuleRoot[], listings: ListingCache, ask?: IgnoreAsker): PromptPart[] {
+  const { strategy, identity = pathIdentity } = args;
+  const { cwd } = rulesInputs(args);
+  const files = collectRepositoryRules(roots, { identity, listings, ...(ask ? { ask } : {}) });
+  if (!files.length) return [];
+  return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
+}
+
 function rulesPartsWith(args: RulesArgs, listings: ListingCache): PromptPart[] {
-  const { workspace, strategy, env = process.env, identity = pathIdentity } = args;
   try {
-    const { cwd, named } = rulesInputs(args);
-    // An entry listed only for choosing has no files to read rules from.
-    const prepared = preparedWorkspaces(env).filter((w) => !w.selectable);
-    const asRoot = (w: PreparedWorkspace): RuleRoot => ({ dir: w.directory, declared: true, primary: w.primary, originalPath: w.originalPath, ancestors: w.ancestorRuleFiles });
-    // A checkout found inside a prepared folder IS that folder (a worktree has
-    // a `.git` too): it keeps that folder's standing, primary or not. "Inside"
-    // is asked of the folders themselves, not of their spelling: the same
-    // folder mounted at a second path (the runner's id mount beside its
-    // arranged path) is that prepared folder too, not another checkout whose
-    // rules are sent again.
-    const idOf = (d: string) => { try { return identity(d); } catch { return null; } };
-    const preparedIds = new Set(prepared.map((w) => idOf(w.directory)).filter((id): id is string => !!id));
-    const isPreparedFolder = (d: string) => {
-      if (!preparedIds.size) return false;
-      for (let cur = resolve(d), i = 0; i < 64; i++) {
-        const id = idOf(cur);
-        if (id && preparedIds.has(id)) return true;
-        const parent = dirname(cur);
-        if (parent === cur) return false;
-        cur = parent;
-      }
-      return false;
-    };
-    const inPrepared = (d: string) => prepared.some((w) => resolve(d) === resolve(w.directory) || resolve(d).startsWith(resolve(w.directory) + sep))
-      || isPreparedFolder(d);
-    const roots: RuleRoot[] = [
-      ...prepared.filter((w) => w.primary).map(asRoot),
-      { dir: cwd, declared: false },
-      ...prepared.filter((w) => !w.primary).map(asRoot),
-      ...named.map((dir) => ({ dir, declared: true })),
-      // A clone tool may have created this checkout in an earlier node. Every
-      // invocation discovers those repositories from the same bounded,
-      // symlink-free workspace walk, without template-specific plumbing.
-      ...subfolders(cwd, true, listings).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
-        .map((dir) => ({ dir, declared: true })),
-    ];
+    const roots = ruleRoots(args, listings);
     markStartup('rule folders walked');
-    const files = collectRepositoryRules(roots, { identity, listings });
-    if (!files.length) return [];
-    return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
+    return partsOf(args, roots, listings);
   } catch {
     return [];
   } finally {
