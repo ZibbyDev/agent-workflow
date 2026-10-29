@@ -1101,6 +1101,10 @@ export async function repositoryRulesPartsAsync(args: RulesArgs = {}): Promise<P
     const prepared = preparedWorkspaces(args.env || process.env).filter((w) => !w.selectable).map((w) => w.directory);
     await prefetchListings([cwd, ...prepared, ...named], listings);
   } catch { /* nothing read ahead: the walk reads every folder itself */ }
+  // The run's startup timeline (startup-marks.ts): the folders read ahead. The
+  // first model call waited 3.7-7.3 s for its rule files on a loaded box
+  // (2026-10-28); these marks say which part.
+  markStartup('rule folders read ahead');
   return rulesPartsWith(args, listings);
 }
 
@@ -1200,6 +1204,7 @@ function rulesPartsWith(args: RulesArgs, listings: ListingCache): PromptPart[] {
       ...subfolders(cwd, true, listings).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
         .map((dir) => ({ dir, declared: true })),
     ];
+    markStartup('rule folders walked');
     const files = collectRepositoryRules(roots, { identity, listings });
     if (!files.length) return [];
     return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
