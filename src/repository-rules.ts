@@ -386,7 +386,13 @@ function realSubdirectory(dir: string, rel: string, listing: Listing | null = nu
 export function ruleFilesInDirectory(dir: string, listings: ListingCache | null = null): Array<{ path: string; name: string; onDemand: boolean }> {
   const out: Array<{ path: string; name: string; onDemand: boolean }> = [];
   const md = (n: string) => /\.(md|mdc)$/i.test(n);
-  const sorted = (d: string) => { try { return readdirSync(d).sort(); } catch { return [] as string[]; } };
+  // A rule folder's names, from the collection's listing when it keeps one (the
+  // read-ahead lists rule folders too); the same names readdirSync gives.
+  // `d` was checked to be a real folder (realSubdirectory) before it is read.
+  const sorted = (d: string) => {
+    if (listings) { const l = directoryListing(d, listings, true); return l ? [...l.keys()].sort() : [] as string[]; }
+    try { return readdirSync(d).sort(); } catch { return [] as string[]; }
+  };
   // THE DIRECTORY IS READ ONCE. Every location starts with one name directly
   // in `dir` (`AGENTS.md`, `.claude`, `.github`, `.cursor`); a location whose
   // first name is not listed here cannot exist, so it costs nothing. Asking the
@@ -480,8 +486,8 @@ export function ruleLocationOf(path: string): { governs: string; name: string; o
  * parent repository. The caller's GIT_DIR-style variables are dropped so the
  * question is about `repoRoot` and nothing else.
  */
-/** The one `git check-ignore` question both askers send (gitIgnoredPaths, gitIgnoredPathsAsync). */
-function gitIgnoreQuestion(repoRoot: string, relPaths: string[]): { args: string[]; env: Record<string, string>; input: string } {
+/** The one `git check-ignore` question both askers send (gitIgnoredPaths, IgnoreSession): `streamed` asks it path by path on one open process. */
+function gitIgnoreQuestion(repoRoot: string, relPaths: string[], streamed = false): { args: string[]; env: Record<string, string>; input: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === 'string' && !/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|CONFIG_PARAMETERS|CONFIG_COUNT)$/.test(k)) env[k] = v;
@@ -490,7 +496,10 @@ function gitIgnoreQuestion(repoRoot: string, relPaths: string[]): { args: string
   env.GIT_TERMINAL_PROMPT = '0';
   env.GIT_OPTIONAL_LOCKS = '0';
   env.GIT_PAGER = 'cat';
-  return { args: ['-c', 'core.fsmonitor=false', '-C', repoRoot, 'check-ignore', '-z', '--stdin'], env,
+  // Streamed: one record per path, matching or not (-v -n), written as soon as
+  // it is answered (GIT_FLUSH), so one process answers question after question.
+  if (streamed) env.GIT_FLUSH = '1';
+  return { args: ['-c', 'core.fsmonitor=false', '-C', repoRoot, 'check-ignore', '-z', ...(streamed ? ['-v', '-n'] : []), '--stdin'], env,
     input: relPaths.map((p) => p.split(sep).join('/')).join('\0') + '\0' };
 }
 
@@ -512,29 +521,175 @@ function gitIgnoredPaths(repoRoot: string, relPaths: string[]): Set<string> | nu
   } catch { return null; }
 }
 
-/** gitIgnoredPaths without blocking: the same question and answer, so several repositories can be asked at once. */
-function gitIgnoredPathsAsync(repoRoot: string, relPaths: string[]): Promise<Set<string> | null> {
-  if (!relPaths.length) return Promise.resolve(new Set());
-  const { args, env, input } = gitIgnoreQuestion(repoRoot, relPaths);
-  return new Promise((done) => {
-    let stdout = '';
-    let size = 0;
-    let settled = false;
-    const finish = (answer: Set<string> | null) => { if (!settled) { settled = true; done(answer); } };
+/**
+ * ONE REPOSITORY'S IGNORE QUESTIONS ON ONE OPEN GIT PROCESS — the read-ahead's
+ * asker (repositoryRulesPartsAsync). The same question gitIgnoredPaths sends,
+ * asked path by path on `git check-ignore -z -v -n --stdin`, which answers
+ * every path with one record (source, line, pattern, path; all but the path
+ * empty when nothing matches) as soon as it is read. A path is ignored when a
+ * pattern matched and it is not a `!` pattern: exactly the paths the plain
+ * question prints. Asking a level at a time this way costs one process per
+ * repository instead of one per level (~20 ms of process start each, several
+ * times per repository per model call).
+ *
+ * Any surprise — the process ends or errors, a record names another path than
+ * the one asked next, an answer takes longer than GIT_TIMEOUT_MS — ends the
+ * session and its pending questions get NO answer (null), never a guess: the
+ * collection then asks git itself, as it always did.
+ */
+class IgnoreSession {
+  private child: ReturnType<typeof spawn> | null = null;
+  private partial = '';
+  private fields: string[] = [];
+  private queue: Array<{ rels: string[]; got: Map<string, boolean>; n: number; done: (answer: Map<string, boolean> | null) => void; timer: ReturnType<typeof setTimeout> }> = [];
+  private dead = false;
+  /** Takers that were handed this session and have not asked yet (it is not idle while they hold it). */
+  held = 0;
+
+  constructor(repoRoot: string, private changed: () => void) {
+    const { args, env } = gitIgnoreQuestion(repoRoot, [], true);
     try {
-      const child = spawn('git', args, { env, timeout: GIT_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'ignore'] });
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk: string) => {
-        size += chunk.length;
-        if (size > 8 * 1024 * 1024) { child.kill(); finish(null); return; }
-        stdout += chunk;
-      });
-      child.on('error', () => finish(null));
-      child.on('close', (status, signal) => finish(signal ? null : gitIgnoreAnswer(status, stdout)));
-      child.stdin.on('error', () => {});
-      child.stdin.end(input);
-    } catch { finish(null); }
-  });
+      const child = spawn('git', args, { env, stdio: ['pipe', 'pipe', 'ignore'] });
+      this.child = child;
+      child.stdout!.setEncoding('utf8');
+      child.stdout!.on('data', (chunk: string) => this.read(chunk));
+      child.on('error', () => this.fail());
+      child.on('close', () => this.fail());
+      child.stdin!.on('error', () => this.fail());
+    } catch { this.fail(); }
+  }
+
+  /** Each of `rels` (work-tree relative, '/'-separated, distinct, none empty) → ignored; null = no answer. */
+  ask(rels: string[]): Promise<Map<string, boolean> | null> {
+    if (this.dead || !this.child) return Promise.resolve(null);
+    if (!rels.length) return Promise.resolve(new Map());
+    return new Promise((done) => {
+      const timer = setTimeout(() => this.fail(), GIT_TIMEOUT_MS);
+      this.queue.push({ rels, got: new Map(), n: 0, done, timer });
+      try { this.child!.stdin!.write(rels.join('\0') + '\0'); } catch { this.fail(); }
+    });
+  }
+
+  idle(): boolean { return !this.dead && this.held === 0 && this.queue.length === 0; }
+  alive(): boolean { return !this.dead; }
+
+  /** No more questions: git exits once its input ends. */
+  end(): void {
+    if (this.dead) return;
+    this.dead = true;
+    for (const b of this.queue.splice(0)) { clearTimeout(b.timer); b.done(null); }
+    try { this.child?.stdin?.end(); } catch { /* already gone */ }
+  }
+
+  private read(chunk: string): void {
+    const parts = (this.partial + chunk).split('\0');
+    this.partial = parts.pop() as string;
+    for (const part of parts) {
+      this.fields.push(part);
+      if (this.fields.length < 4) continue;
+      const [, , pattern, path] = this.fields;
+      this.fields = [];
+      const batch = this.queue[0];
+      if (!batch || path !== batch.rels[batch.n]) { this.fail(); return; }
+      batch.got.set(path, pattern !== '' && !pattern.startsWith('!'));
+      batch.n += 1;
+      if (batch.n === batch.rels.length) {
+        clearTimeout(batch.timer);
+        this.queue.shift();
+        batch.done(batch.got);
+        this.changed();
+      }
+    }
+  }
+
+  private fail(): void {
+    if (this.dead) return;
+    this.dead = true;
+    for (const b of this.queue.splice(0)) { clearTimeout(b.timer); b.done(null); }
+    try { this.child?.kill(); } catch { /* already gone */ }
+    this.changed();
+  }
+}
+
+/**
+ * Git processes the read-ahead keeps open at once (IgnoreSession each; an idle
+ * one is closed to make room). Each holds ~2-4 MB (its index) for the second
+ * or so the read-ahead takes. A workspace holding the person's project folder
+ * beside the run's own has ~16-30 repositories, every one asked level after
+ * level at the same time: with room for 8 or 16 the sessions were closed and
+ * reopened ~3 times each (measured 2026-10-30).
+ */
+const IGNORE_SESSIONS_MAX = 32;
+
+/**
+ * The read-ahead's ignore questions for every repository of one collection,
+ * answered into `answers` — the map the collection's own memoised asker
+ * (ignoreAsker) reads, so a path answered here is not asked again. Only real
+ * answers are written: a repository git could not answer for here is left
+ * unanswered and the collection asks it itself. A path already answered, or
+ * already being asked, is not asked twice. At most IGNORE_SESSIONS_MAX git
+ * processes are open at a time. `close()` ends them all.
+ */
+function ignoreSessions(answers: IgnoreAnswers): { ask: (repoRoot: string, relPaths: string[]) => Promise<void>; close: () => void } {
+  const open = new Map<string, IgnoreSession>();
+  const failed = new Set<string>();
+  const asking = new Map<string, Map<string, Promise<void>>>();
+  const waiting: Array<() => void> = [];
+  const changed = () => { for (const wake of waiting.splice(0)) wake(); };
+  let closed = false;
+  // A session for `repo`, held for the caller (held -= 1 when it asks).
+  const take = async (repo: string): Promise<IgnoreSession | null> => {
+    for (;;) {
+      if (closed) return null;
+      for (const [r, s] of open) if (!s.alive()) { failed.add(r); open.delete(r); }
+      // This repository's session failed: the collection asks git itself.
+      if (failed.has(repo)) return null;
+      const had = open.get(repo);
+      if (had) { had.held += 1; return had; }
+      if (open.size >= IGNORE_SESSIONS_MAX) {
+        const idle = [...open].find(([, s]) => s.idle());
+        if (idle) { idle[1].end(); open.delete(idle[0]); }
+      }
+      if (open.size < IGNORE_SESSIONS_MAX) {
+        const s = new IgnoreSession(repo, changed);
+        open.set(repo, s);
+        s.held += 1;
+        return s;
+      }
+      await new Promise<void>((wake) => waiting.push(wake));
+    }
+  };
+  const ask = async (repo: string, relPaths: string[]): Promise<void> => {
+    let known = answers.get(repo);
+    if (known === null) return;
+    let inFlight = asking.get(repo);
+    if (!inFlight) { inFlight = new Map(); asking.set(repo, inFlight); }
+    const waits = new Set<Promise<void>>();
+    const fresh = new Set<string>();
+    for (const p of relPaths.map((r) => r.split(sep).join('/'))) {
+      if (!p || known?.has(p) || fresh.has(p)) continue;
+      const pending = inFlight.get(p);
+      if (pending) waits.add(pending); else fresh.add(p);
+    }
+    if (fresh.size) {
+      const done = (async () => {
+        const s = await take(repo);
+        if (!s) return;
+        s.held -= 1;
+        const got = await s.ask([...fresh]);
+        if (!got) return;
+        known = answers.get(repo);
+        if (known === null) return;
+        if (!known) { known = new Map(); answers.set(repo, known); }
+        for (const [p, ignored] of got) known.set(p, ignored);
+      })().finally(() => { for (const p of fresh) inFlight!.delete(p); });
+      for (const p of fresh) inFlight.set(p, done);
+      waits.add(done);
+    }
+    await Promise.all(waits);
+  };
+  const close = () => { closed = true; for (const s of open.values()) s.end(); open.clear(); changed(); };
+  return { ask, close };
 }
 
 /**
@@ -575,8 +730,53 @@ function holdsGit(dir: string, listings: ListingCache | null): boolean {
   return !!git;
 }
 
+/**
+ * existsSync(`dir`/.git), answered from `dir`'s listing when the collection
+ * already holds it (a `.git` entry that is not a symlink exists; none means
+ * none); a symlinked `.git`, or a folder not listed, is asked directly.
+ */
+function gitEntryExists(dir: string, listings: ListingCache): boolean {
+  const listing = listings.get(dir);
+  const git = listing?.get('.git');
+  if (!listing || (git && git.isSymbolicLink())) return existsSync(join(dir, '.git'));
+  return !!git;
+}
+
 /** A folder found by the walk and the repository whose ignore rules govern it (null = none / git cannot say). */
 interface WalkedDir { dir: string; repo: string | null }
+
+/**
+ * WHAT A STEP OF THE COLLECTION IS ABOUT TO READ — the folders it will list
+ * (`[dir, known to be a real folder]`) or the ignore questions it will ask
+ * (`[repository, relative paths]`). The walk and the collection are written
+ * ONCE, as steps that announce what they need and then read it the ordinary
+ * way, through the collection's listing cache and its memoised asker. Run
+ * synchronously (runSteps) the announcements are ignored and every read is the
+ * plain blocking one, as before. Run by the read-ahead (repositoryRulesPartsAsync)
+ * each announcement is fetched first — listings several at once, git questions
+ * on one open process per repository — and every root runs at once, so the
+ * reads that follow are answered from what was fetched. Either way the
+ * decisions are made by the same code on the same answers: the result is the
+ * same, byte for byte.
+ */
+type Need = { list: Array<[string, boolean]> } | { ask: Array<[string, string[]]> };
+type Steps<T> = Generator<Need, T, void>;
+
+/** Run `steps` with blocking reads only (the announcements are not fetched ahead). */
+function runSteps<T>(steps: Steps<T>): T {
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+/** Run `steps`, fetching each announcement with `fetch` before the step reads it. */
+async function runStepsAhead<T>(steps: Steps<T>, fetch: (need: Need) => Promise<void>): Promise<T> {
+  for (;;) {
+    const r: IteratorResult<Need, T> = steps.next();
+    if (r.done) return r.value as T;
+    try { await fetch(r.value as Need); } catch { /* not fetched: the step reads it itself */ }
+  }
+}
 
 /**
  * Subfolders under `top` (breadth first, bounded), excluding `top` itself.
@@ -587,12 +787,19 @@ interface WalkedDir { dir: string; repo: string | null }
  * repository. Without it (the checkout discovery walk) only the fixed skips
  * apply.
  */
-function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker(), listings = null }:
-  { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker; listings?: ListingCache | null } = {}): WalkedDir[] {
+type WalkOptions = { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker; listings?: ListingCache | null };
+function walkSubfolders(top: string, opts: WalkOptions = {}): WalkedDir[] {
+  return runSteps(walkSubfolderSteps(top, opts));
+}
+
+function* walkSubfolderSteps(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker(), listings = null }: WalkOptions = {}): Steps<WalkedDir[]> {
   const out: WalkedDir[] = [];
   let level: WalkedDir[] = [{ dir: top, repo: honourIgnore ? repository : null }];
   let scanned = 0;
   for (let depth = 0; level.length && depth < MAX_DEEPER_DEPTH && scanned < MAX_DIRS_SCANNED; depth++) {
+    // The folders this level lists: the walk's top is checked, every other
+    // one came from a listing as a real folder.
+    if (listings) yield { list: level.slice(0, MAX_DIRS_SCANNED - scanned).map(({ dir }) => [dir, dir !== top] as [string, boolean]) };
     // Children of this level, in discovery order, before the ignore question.
     const found: Array<WalkedDir & { name: string; ownRepo: boolean; cache: boolean }> = [];
     for (const { dir, repo } of level) {
@@ -623,9 +830,14 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
           }
           continue;
         }
-        const child = join(dir, e.name);
-        const ownRepo = honourIgnore && holdsGit(child, listings);
-        found.push({ dir: child, repo: ownRepo ? child : repo, name: e.name, ownRepo, cache: false });
+        found.push({ dir: join(dir, e.name), repo, name: e.name, ownRepo: false, cache: false });
+      }
+    }
+    if (honourIgnore) {
+      // Each child's own listing says whether it holds `.git` (a repository of its own).
+      if (listings) yield { list: found.filter((f) => !f.cache).map((f) => [f.dir, true] as [string, boolean]) };
+      for (const f of found) {
+        if (!f.cache && holdsGit(f.dir, listings)) { f.ownRepo = true; f.repo = f.dir; }
       }
     }
     // One question per governing repository for this level.
@@ -638,6 +850,7 @@ function walkSubfolders(top: string, { includeCheckoutCache = false, honourIgnor
         list.push(relative(f.repo, f.dir));
         byRepo.set(f.repo, list);
       }
+      if (byRepo.size) yield { ask: [...byRepo] };
       for (const [repo, rels] of byRepo) answers.set(repo, ask(repo, rels));
     }
     const next: WalkedDir[] = [];
@@ -888,71 +1101,121 @@ export interface RuleRoot {
  * is still one file) — is listed once, in full if either root sends it in
  * full. Never throws.
  */
-export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity, listings = new Map(), ask = ignoreAsker(), questionsOnly = false }:
-  { identity?: PathIdentity; listings?: ListingCache; ask?: IgnoreAsker; questionsOnly?: boolean } = {}): RuleFile[] {
-  type Found = Omit<RuleFile, 'full' | 'summary' | 'text' | 'bytes'> & { onDemand: boolean; primary: boolean };
-  const found = new Map<string, Found>();
-  const byPlace = (f: Found) => sendsInFull({ origin: f.origin, primary: f.primary });
-  const keyOf = (p: string) => { let id: string | null = null; try { id = identity(p); } catch { id = null; } return id ? `id:${id}` : `path:${p}`; };
-  const add = (f: Found) => {
-    const key = keyOf(f.path);
-    const had = found.get(key);
-    // Reached again from where it is sent in full (the primary folder's chain
-    // or the folders above it): that standing wins, whoever reached it first.
-    // Otherwise the first path it was reached by is the one the run is told.
-    if (!had || (!byPlace(had) && byPlace(f))) found.set(key, f);
-  };
+export function collectRepositoryRules(roots: RuleRoot[], { identity = pathIdentity, listings = new Map(), ask = ignoreAsker() }:
+  { identity?: PathIdentity; listings?: ListingCache; ask?: IgnoreAsker } = {}): RuleFile[] {
   // Every folder this collection looks at is listed once and the listing is
   // reused (directoryListing): the walk, its `.git` check and the rule-file
   // lookup each used to ask the filesystem separately. The caller may hand
   // over listings read ahead (prefetchListings).
-  for (const r of roots || []) {
-    if (!r || typeof r.dir !== 'string' || !r.dir || !isRealDir(r.dir)) continue;
-    const primary = r.primary !== false;
-    let chainInfo;
-    try { chainInfo = workingChain(r.dir); } catch { continue; }
-    const { root, chain, inRepository } = chainInfo;
-    // ABOVE the folder on the person's disk (the runner's list): only list
-    // locations, only in folders that really hold this one, never a symlink.
-    const original = typeof r.originalPath === 'string' && isAbsolute(r.originalPath) ? r.originalPath : '';
-    const ancestors = original && Array.isArray(r.ancestors) ? r.ancestors.slice(0, MAX_ANCESTOR_FILES) : [];
-    const above: Found[] = [];
-    for (const p of ancestors) {
-      const loc = typeof p === 'string' ? ruleLocationOf(p) : null;
-      if (!loc || loc.governs === '/' || !original.startsWith(`${loc.governs}/`)) continue;
-      if (!realSubdirectory(loc.governs, relative(loc.governs, dirname(p as string)).split(sep).join('/')) || !isFile(p as string)) continue;
-      above.push({ path: p as string, name: loc.name, root: loc.governs, scope: '', governs: loc.governs, onChain: true, origin: 'ancestor', onDemand: loc.onDemand, primary });
-    }
-    above.sort((a, b) => a.governs.length - b.governs.length);
-    for (const f of above) add(f);
-    for (const d of chain) {
-      for (const f of ruleFilesInDirectory(d, listings)) add({ ...f, root, scope: relative(root, d), governs: d, onChain: true, origin: 'chain', primary });
-    }
-    if (!inRepository && !r.declared) continue;
-    const workDir = chain[chain.length - 1];
-    // Rule files below the working directory, each judged by the repository
-    // that holds it: a rule file git ignores (not just one in an ignored
-    // folder) is not that repository's rule either.
-    const below: Array<Found & { repo: string | null }> = [];
-    for (const { dir: d, repo } of walkSubfolders(workDir, { honourIgnore: true, repository: inRepository ? root : null, ask, listings })) {
-      for (const f of ruleFilesInDirectory(d, listings)) {
-        below.push({ ...f, repo, root, scope: relative(root, d), governs: d, onChain: false, origin: 'subfolder', primary });
-      }
-    }
-    const byRepo = new Map<string, string[]>();
-    for (const f of below) if (f.repo) byRepo.set(f.repo, [...(byRepo.get(f.repo) || []), relative(f.repo, f.path)]);
-    const ignoredFiles = new Map<string, Set<string> | null>();
-    for (const [repo, rels] of byRepo) ignoredFiles.set(repo, ask(repo, rels));
-    for (const { repo, ...f } of below) {
-      const ignored = repo ? ignoredFiles.get(repo) : null;
-      if (ignored && ignored.has(relative(repo!, f.path).split(sep).join('/'))) continue;
-      add(f);
+  return readRuleFiles(mergeFound((roots || []).map((r) => runSteps(rootRuleSteps(r, ask, listings))), identity));
+}
+
+/** A rule file found, before it is read. */
+type FoundRule = Omit<RuleFile, 'full' | 'summary' | 'text' | 'bytes'> & { onDemand: boolean; primary: boolean };
+
+/**
+ * The rule files one root contributes, in the order the collection takes
+ * them: above the folder (outermost first), its chain, then its subfolders.
+ * A root's files depend only on the filesystem and git's answers, never on
+ * another root's, so roots can be collected at once and merged in order
+ * (mergeFound) with the same result as one after another.
+ */
+function* rootRuleSteps(r: RuleRoot, ask: IgnoreAsker, listings: ListingCache): Steps<FoundRule[]> {
+  const out: FoundRule[] = [];
+  if (!r || typeof r.dir !== 'string' || !r.dir || !isRealDir(r.dir)) return out;
+  const primary = r.primary !== false;
+  let chainInfo;
+  try { chainInfo = workingChain(r.dir); } catch { return out; }
+  const { root, chain, inRepository } = chainInfo;
+  // ABOVE the folder on the person's disk (the runner's list): only list
+  // locations, only in folders that really hold this one, never a symlink.
+  const original = typeof r.originalPath === 'string' && isAbsolute(r.originalPath) ? r.originalPath : '';
+  const ancestors = original && Array.isArray(r.ancestors) ? r.ancestors.slice(0, MAX_ANCESTOR_FILES) : [];
+  const above: FoundRule[] = [];
+  for (const p of ancestors) {
+    const loc = typeof p === 'string' ? ruleLocationOf(p) : null;
+    if (!loc || loc.governs === '/' || !original.startsWith(`${loc.governs}/`)) continue;
+    if (!realSubdirectory(loc.governs, relative(loc.governs, dirname(p as string)).split(sep).join('/')) || !isFile(p as string)) continue;
+    above.push({ path: p as string, name: loc.name, root: loc.governs, scope: '', governs: loc.governs, onChain: true, origin: 'ancestor', onDemand: loc.onDemand, primary });
+  }
+  above.sort((a, b) => a.governs.length - b.governs.length);
+  out.push(...above);
+  yield { list: chain.map((d) => [d, false] as [string, boolean]) };
+  yield { list: ruleFoldersIn(chain, listings) };
+  for (const d of chain) {
+    for (const f of ruleFilesInDirectory(d, listings)) out.push({ ...f, root, scope: relative(root, d), governs: d, onChain: true, origin: 'chain', primary });
+  }
+  if (!inRepository && !r.declared) return out;
+  const workDir = chain[chain.length - 1];
+  // Rule files below the working directory, each judged by the repository
+  // that holds it: a rule file git ignores (not just one in an ignored
+  // folder) is not that repository's rule either.
+  const walked = yield* walkSubfolderSteps(workDir, { honourIgnore: true, repository: inRepository ? root : null, ask, listings });
+  yield { list: ruleFoldersIn(walked.map((w) => w.dir), listings) };
+  const below: Array<FoundRule & { repo: string | null }> = [];
+  for (const { dir: d, repo } of walked) {
+    for (const f of ruleFilesInDirectory(d, listings)) {
+      below.push({ ...f, repo, root, scope: relative(root, d), governs: d, onChain: false, origin: 'subfolder', primary });
     }
   }
-  // A rehearsal only collects git's questions (askedAhead); no file is read.
-  if (questionsOnly) return [];
+  const byRepo = new Map<string, string[]>();
+  for (const f of below) if (f.repo) byRepo.set(f.repo, [...(byRepo.get(f.repo) || []), relative(f.repo, f.path)]);
+  if (byRepo.size) yield { ask: [...byRepo] };
+  const ignoredFiles = new Map<string, Set<string> | null>();
+  for (const [repo, rels] of byRepo) ignoredFiles.set(repo, ask(repo, rels));
+  for (const { repo, ...f } of below) {
+    const ignored = repo ? ignoredFiles.get(repo) : null;
+    if (ignored && ignored.has(relative(repo!, f.path).split(sep).join('/'))) continue;
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * The rule folders (`.cursor/rules`, `.claude/skills`) the lookup will list in
+ * `dirs`, as far as each folder's listing already shows them; the lookup
+ * itself checks each is a real folder before it reads it.
+ */
+function ruleFoldersIn(dirs: string[], listings: ListingCache): Array<[string, boolean]> {
+  const out: Array<[string, boolean]> = [];
+  for (const d of dirs) {
+    const listing = listings.get(d);
+    if (!listing) continue;
+    for (const entry of REPOSITORY_RULE_FILES) {
+      if (!entry.dir) continue;
+      const first = listing.get(entry.dir.split('/')[0]);
+      if (first && first.isDirectory()) out.push([join(d, entry.dir), false]);
+    }
+  }
+  return out;
+}
+
+/**
+ * The roots' files as one list: the same file reached from two roots — under
+ * one path or two (`identity`: one file mounted at two places is still one
+ * file) — is listed once, in full if either root sends it in full.
+ */
+function mergeFound(perRoot: FoundRule[][], identity: PathIdentity): FoundRule[] {
+  const found = new Map<string, FoundRule>();
+  const byPlace = (f: FoundRule) => sendsInFull({ origin: f.origin, primary: f.primary });
+  const keyOf = (p: string) => { let id: string | null = null; try { id = identity(p); } catch { id = null; } return id ? `id:${id}` : `path:${p}`; };
+  for (const files of perRoot) {
+    for (const f of files) {
+      const key = keyOf(f.path);
+      const had = found.get(key);
+      // Reached again from where it is sent in full (the primary folder's chain
+      // or the folders above it): that standing wins, whoever reached it first.
+      // Otherwise the first path it was reached by is the one the run is told.
+      if (!had || (!byPlace(had) && byPlace(f))) found.set(key, f);
+    }
+  }
+  return [...found.values()];
+}
+
+/** Each found file read: its size, its own declaration, its text (full or the head). An empty file holds no rule. */
+function readRuleFiles(found: FoundRule[]): RuleFile[] {
   const out: RuleFile[] = [];
-  for (const { onDemand, primary, ...f } of found.values()) {
+  for (const { onDemand, primary, ...f } of found) {
     let bytes = 0;
     try { bytes = lstatSync(f.path).size; } catch { bytes = 0; }
     const head = readHead(f.path, DECLARATION_HEAD_BYTES);
@@ -1122,100 +1385,69 @@ export function repositoryRulesParts(args: RulesArgs = {}): PromptPart[] {
 }
 
 /**
- * repositoryRulesParts, the same parts, with the folders it will look at
- * listed ahead IN PARALLEL first. The walk below reads one folder at a time and
- * waits for each; on a project folder mounted into a run container (~1 ms a
- * listing, more on a loaded machine) its ~700 listings took 0.6–2.0 s before
- * every first model call (run_log/product-owner/2026-10-25-run-boot-to-first-
- * turn). The listings read ahead are the same `readdir` answers the walk would
- * get; a folder not read ahead is read by the walk itself, as before.
+ * repositoryRulesParts, the same parts, with what the collection reads fetched
+ * ahead and every root collected at once.
+ *
+ * The collection reads one folder at a time and asks git one level at a time,
+ * waiting for each. In a run container every listing crosses to the host
+ * (~1 ms, more on a loaded machine) and every git question was a process of
+ * its own: a workspace that holds the person's project folder beside the run's
+ * own folders made ~3,000 listings and ~30–60 git processes before every first
+ * model call — 1.5 s between "rule folders walked" and "rule ignores asked" in
+ * a run container (2026-10-30), after the folders were already read ahead.
+ *
+ * Here the collection's steps announce what they are about to read
+ * (rootRuleSteps): the folders are listed several at once, the git questions
+ * go to one open git process per repository (ignoreSessions), and every root
+ * runs at the same time. Only what the collection reads is fetched — no
+ * superset of folders git ignores, no rehearsal of the collection. The steps
+ * then read the same answers through the same code as repositoryRulesParts, so
+ * the parts are the same, byte for byte; anything not fetched is read the
+ * ordinary way.
  */
 export async function repositoryRulesPartsAsync(args: RulesArgs = {}): Promise<PromptPart[]> {
   const listings: ListingCache = new Map();
-  try {
-    const { cwd, named } = rulesInputs(args);
-    const prepared = preparedWorkspaces(args.env || process.env).filter((w) => !w.selectable).map((w) => w.directory);
-    await prefetchListings([cwd, ...prepared, ...named], listings);
-  } catch { /* nothing read ahead: the walk reads every folder itself */ }
-  // The run's startup timeline (startup-marks.ts): the folders read ahead. The
-  // first model call waited 3.7-7.3 s for its rule files on a loaded box
-  // (2026-10-28); these marks say which part.
+  const list = listingReader(listings);
+  // The working directory's folders, for the checkout discovery walk (ruleRoots).
+  try { await prefetchListings([rulesInputs(args).cwd], listings, list); } catch { /* the walk reads every folder itself */ }
+  // The run's startup timeline (startup-marks.ts): the first model call waited
+  // 3.7-7.3 s for its rule files on a loaded box (2026-10-28); these marks say
+  // which part.
   markStartup('rule folders read ahead');
+  const answers: IgnoreAnswers = new Map();
+  const git = ignoreSessions(answers);
   try {
     const roots = ruleRoots(args, listings);
     markStartup('rule folders walked');
-    // Each root's own folders, read ahead too: a checkout found below the
-    // working directory is walked to its own depth, below what was read above.
-    try { await prefetchListings(roots.map((r) => r.dir), listings); } catch { /* the walk reads them itself */ }
-    const ask = await askedAhead(roots, args, listings);
+    const ask = ignoreAsker(answers);
+    const fetch = async (need: Need): Promise<void> => {
+      if ('list' in need) await Promise.all(need.list.map(([dir, real]) => list(dir, real)));
+      else await Promise.all(need.ask.map(([repo, rels]) => git.ask(repo, rels)));
+    };
+    const perRoot = await Promise.all(roots.map((r) => runStepsAhead(rootRuleSteps(r, ask, listings), fetch)));
+    git.close();
     markStartup('rule ignores asked');
-    return partsOf(args, roots, listings, ask);
+    const files = readRuleFiles(mergeFound(perRoot, args.identity || pathIdentity));
+    return partsOfFiles(args, files);
   } catch {
     return [];
   } finally {
+    git.close();
     markStartup('repository rules read');
   }
 }
 
-/** How many repositories git is asked about at once (askedAhead). */
-const IGNORE_ASK_CONCURRENCY = 4;
-
-/**
- * The collection's git questions, asked before it runs, several repositories
- * at once. The collection asks git which folders and rule files each
- * repository ignores one level at a time, waiting for each answer: ~60 git
- * processes, one after another, for a workspace holding a large project tree
- * (1.0 of 1.3 s on the Mac's own disk; the first model call waited 3.7-7.3 s
- * for its rule files in a run container on a loaded box, 2026-10-28). A
- * rehearsal of the same collection, answering "nothing ignored", gathers every
- * question it could ask (a superset: it also descends what git would ignore);
- * each repository is asked them in one process; the collection then reads the
- * answers. A question the rehearsal missed, or a repository git could not
- * answer for here, is asked by the collection itself, as before — the answers
- * are git's own either way.
- */
-async function askedAhead(roots: RuleRoot[], args: RulesArgs, listings: ListingCache): Promise<IgnoreAsker> {
-  const questions = new Map<string, Set<string>>();
-  const rehearse: IgnoreAsker = (repo, rels) => {
-    let asked = questions.get(repo);
-    if (!asked) { asked = new Set(); questions.set(repo, asked); }
-    for (const p of rels) asked.add(p.split(sep).join('/'));
-    return new Set();
-  };
-  collectRepositoryRules(roots, { identity: args.identity || pathIdentity, listings, ask: rehearse, questionsOnly: true });
-  const answers: IgnoreAnswers = new Map();
-  const pending = [...questions].filter(([, rels]) => rels.size > 0);
-  await Promise.all(Array.from({ length: Math.min(IGNORE_ASK_CONCURRENCY, pending.length) }, async () => {
-    for (let next = pending.shift(); next; next = pending.shift()) {
-      const [repo, rels] = next;
-      const list = [...rels];
-      const ignored = await gitIgnoredPathsAsync(repo, list);
-      if (ignored) answers.set(repo, new Map(list.map((p) => [p, ignored.has(p)])));
-    }
-  }));
-  return ignoreAsker(answers);
-}
-
-/** How many folders below each top are read ahead, and how deep: the walk's own bounds, one level further (the rule lookup lists the walk's deepest folders too). */
+/** How many folders are listed at once by the read-ahead. */
 const PREFETCH_CONCURRENCY = 16;
 
 /**
- * Lists, in parallel, the folders the walk from each top will list, into
- * `listings`: the walk's own order (breadth first, names sorted), skips
- * (hidden and dependency folders, symlinks) and bounds (MAX_DIRS_SCANNED
- * scanned, MAX_DEEPER_DEPTH levels), plus every folder a scanned level finds
- * (the walk looks in each for `.git`, and in the last for rule files). A folder git ignores is read too
- * — the walk asks git per level; reading it costs a parallel listing, never a
- * different answer — so a walk told what git ignores lists a subset of these,
- * give or take the folders past its bound. A folder that cannot be listed is
- * left out, so the walk asks for it itself.
- *
- * Mirroring the walk matters: the earlier read-ahead spent a shared budget of
- * 1000 folders per top in no particular order, and a workspace holding a large
- * project tree still listed ~800 folders one at a time behind it (0.8 s in a
- * run container, 2026-10-29).
+ * Lists a folder into `listings`, PREFETCH_CONCURRENCY at a time, each folder
+ * once: the same entries the collection's own listing (directoryListing) would
+ * read. A folder not known to be a real one (`real` false) is listed only when
+ * it is one (never through a symlink, as directoryListing). A folder that
+ * cannot be listed is left out, so the collection asks for it itself.
  */
-async function prefetchListings(tops: string[], listings: ListingCache): Promise<void> {
+function listingReader(listings: ListingCache): (dir: string, real?: boolean) => Promise<void> {
   let active = 0;
   const waiting: Array<() => void> = [];
   const slot = async () => {
@@ -1224,21 +1456,37 @@ async function prefetchListings(tops: string[], listings: ListingCache): Promise
   };
   const free = () => { active -= 1; const next = waiting.shift(); if (next) next(); };
   const inFlight = new Map<string, Promise<void>>();
-  const list = (dir: string): Promise<void> => {
+  return (dir: string, real = true): Promise<void> => {
     if (listings.has(dir)) return Promise.resolve();
     let pending = inFlight.get(dir);
     if (!pending) {
+      if (!real && !isRealDir(dir)) return Promise.resolve();
       pending = (async () => {
         await slot();
         try {
           const entries = await readdir(dir, { withFileTypes: true });
           if (!listings.has(dir)) listings.set(dir, new Map(entries.map((e) => [e.name, e] as [string, Dirent])));
-        } catch { /* left for the walk */ } finally { free(); }
+        } catch { /* left for the collection */ } finally { free(); }
       })();
       inFlight.set(dir, pending);
     }
     return pending;
   };
+}
+
+/**
+ * Lists, in parallel, the folders the checkout discovery walk from each top
+ * will list: the walk's own order (breadth first, names sorted), skips
+ * (hidden and dependency folders, symlinks) and bounds (MAX_DIRS_SCANNED
+ * scanned, MAX_DEEPER_DEPTH levels), plus every folder a scanned level finds
+ * (ruleRoots looks in each for `.git`).
+ *
+ * Mirroring the walk matters: the earlier read-ahead spent a shared budget of
+ * 1000 folders per top in no particular order, and a workspace holding a large
+ * project tree still listed ~800 folders one at a time behind it (0.8 s in a
+ * run container, 2026-10-29).
+ */
+async function prefetchListings(tops: string[], listings: ListingCache, list: (dir: string) => Promise<void> = listingReader(listings)): Promise<void> {
   const sortedChildren = (dir: string): string[] => {
     const listing = listings.get(dir);
     if (!listing) return [];
@@ -1255,9 +1503,8 @@ async function prefetchListings(tops: string[], listings: ListingCache): Promise
       scanned += scan.length;
       level = scan.flatMap(sortedChildren);
       // Every folder a scanned level finds is listed, not only the ones the
-      // next level scans: the walk looks in each for `.git` (a repository of
-      // its own) and the last level found for rule files.
-      await Promise.all(level.map(list));
+      // next level scans: ruleRoots looks in each for `.git`.
+      await Promise.all(level.map((d) => list(d)));
     }
   };
   await Promise.all([...new Set(tops.map((t) => resolve(t)))].filter((top) => isRealDir(top)).map(walkFrom));
@@ -1299,18 +1546,20 @@ function ruleRoots(args: RulesArgs, listings: ListingCache): RuleRoot[] {
     // A clone tool may have created this checkout in an earlier node. Every
     // invocation discovers those repositories from the same bounded,
     // symlink-free workspace walk, without template-specific plumbing.
-    ...subfolders(cwd, true, listings).filter((dir) => existsSync(join(dir, '.git')) && !inPrepared(dir))
+    ...subfolders(cwd, true, listings).filter((dir) => gitEntryExists(dir, listings) && !inPrepared(dir))
       .map((dir) => ({ dir, declared: true })),
   ];
 }
 
 /** The parts for the rule files collected from `roots`. */
-function partsOf(args: RulesArgs, roots: RuleRoot[], listings: ListingCache, ask?: IgnoreAsker): PromptPart[] {
-  const { strategy, identity = pathIdentity } = args;
-  const { cwd } = rulesInputs(args);
-  const files = collectRepositoryRules(roots, { identity, listings, ...(ask ? { ask } : {}) });
+function partsOf(args: RulesArgs, roots: RuleRoot[], listings: ListingCache): PromptPart[] {
+  return partsOfFiles(args, collectRepositoryRules(roots, { identity: args.identity || pathIdentity, listings }));
+}
+
+/** The parts for collected rule files, rendered for the node's strategy. */
+function partsOfFiles(args: RulesArgs, files: RuleFile[]): PromptPart[] {
   if (!files.length) return [];
-  return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, strategy?.nativeRuleFiles, cwd) });
+  return renderRepositoryRulesParts(files, { native: nativelyLoaded(files, args.strategy?.nativeRuleFiles, rulesInputs(args).cwd) });
 }
 
 function rulesPartsWith(args: RulesArgs, listings: ListingCache): PromptPart[] {

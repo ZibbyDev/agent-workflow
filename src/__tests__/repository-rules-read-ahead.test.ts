@@ -15,31 +15,47 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 
-const calls = vi.hoisted(() => ({ readdir: 0, gitWaited: 0, gitAhead: 0 }));
+const calls = vi.hoisted(() => ({ readdir: 0, gitWaited: 0, gitAhead: 0, listedAhead: [] as string[], breakAhead: false }));
 vi.mock('fs', async (importOriginal) => {
   const real: any = await importOriginal();
   const readdirSync = (...args: any[]) => { calls.readdir += 1; return real.readdirSync(...args); };
   return { ...real, default: { ...real, readdirSync }, readdirSync };
+});
+// The folders listed ahead (the read-ahead lists with fs/promises).
+vi.mock('fs/promises', async (importOriginal) => {
+  const real: any = await importOriginal();
+  const readdir = (...args: any[]) => { calls.listedAhead.push(String(args[0])); return real.readdir(...args); };
+  return { ...real, default: { ...real, readdir }, readdir };
 });
 // The git questions: asked one at a time, waiting (spawnSync), or ahead, several at once (spawn).
 vi.mock('child_process', async (importOriginal) => {
   const real: any = await importOriginal();
   const asksGit = (cmd: string, args: any) => cmd === 'git' && Array.isArray(args) && args.includes('check-ignore');
   const spawnSync = (cmd: string, args: any, ...rest: any[]) => { if (asksGit(cmd, args)) calls.gitWaited += 1; return real.spawnSync(cmd, args, ...rest); };
-  const spawn = (cmd: string, args: any, ...rest: any[]) => { if (asksGit(cmd, args)) calls.gitAhead += 1; return real.spawn(cmd, args, ...rest); };
+  const spawn = (cmd: string, args: any, ...rest: any[]) => {
+    if (!asksGit(cmd, args)) return real.spawn(cmd, args, ...rest);
+    calls.gitAhead += 1;
+    // A git that cannot answer here (it exits at once).
+    if (calls.breakAhead) return real.spawn(cmd, ['--not-an-option'], ...rest);
+    return real.spawn(cmd, args, ...rest);
+  };
   return { ...real, default: { ...real, spawnSync, spawn }, spawnSync, spawn };
 });
 
 const { repositoryRulesParts, repositoryRulesPartsAsync } = await import('../repository-rules.js');
 
 let base: string;
-beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'rules-ahead-')); calls.readdir = 0; calls.gitWaited = 0; calls.gitAhead = 0; });
+beforeEach(() => {
+  base = mkdtempSync(join(tmpdir(), 'rules-ahead-'));
+  calls.readdir = 0; calls.gitWaited = 0; calls.gitAhead = 0; calls.listedAhead = []; calls.breakAhead = false;
+});
 afterEach(() => { rmSync(base, { recursive: true, force: true }); });
 
 const write = (path: string, text: string) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); };
 const gitInit = (dir: string) => spawnSync('git', ['init', '-q', dir], { stdio: 'ignore' });
+const git = (dir: string, ...args: string[]) => spawnSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { stdio: 'ignore' });
 
 /** A run's workspace: two prepared folders (one inside the other), a clone found by the walk, and the things the walk must not read. */
 function workspace() {
@@ -138,5 +154,77 @@ describe('rule-file walk read ahead', () => {
   it('a workspace that cannot be read gives the same answer either way', async () => {
     const args = { workspace: join(base, 'missing'), env: {}, strategy: {} };
     expect(await repositoryRulesPartsAsync(args)).toEqual(repositoryRulesParts(args));
+  });
+
+
+  // 2026-10-30: the read-ahead listed every folder below each root, git's
+  // ignored ones included (a superset), then rehearsed the whole collection to
+  // gather git's questions, then ran the collection: ~4,300 listings where
+  // ~3,100 were read, 1.5 s on the box between "rule folders walked" and "rule
+  // ignores asked". The collection's own steps now say what they read next.
+  /** A repository whose ignore rules use every form git has: folders, globs, `!` re-includes, a tracked file in an ignored folder, odd names. */
+  function ignoringRepository() {
+    // The run's working directory is elsewhere (its own walk, for clones, lists every folder below it).
+    const ws = join(base, 'ws');
+    mkdirSync(ws, { recursive: true });
+    const r = join(base, 'project', 'repo');
+    gitInit(r);
+    write(join(r, '.gitignore'), 'generated/\nkept-out/\nnotes/*\n!notes/AGENTS.md\nlocal/AGENTS.md\n');
+    write(join(r, 'AGENTS.md'), 'ROOT_RULE');
+    for (let i = 0; i < 20; i++) write(join(r, 'generated', `copy${i}`, 'src', 'AGENTS.md'), 'IGNORED_COPY');
+    write(join(r, 'kept-out', 'AGENTS.md'), 'TRACKED_IN_IGNORED_FOLDER');
+    write(join(r, 'notes', 'AGENTS.md'), 'RE_INCLUDED_RULE');
+    write(join(r, 'notes', 'drafts', 'AGENTS.md'), 'IGNORED_NOTE');
+    write(join(r, 'local', 'AGENTS.md'), 'IGNORED_FILE');
+    write(join(r, 'a b', 'ü', 'CLAUDE.md'), 'ODD_NAME_RULE');
+    write(join(r, 'dist', 'AGENTS.md'), 'TRACKED_DIST');
+    git(r, 'add', '.gitignore', 'AGENTS.md', 'dist/AGENTS.md');
+    git(r, 'add', '-f', 'kept-out/AGENTS.md');
+    git(r, 'commit', '-qm', 'init');
+    const inner = join(r, 'packages', 'inner');
+    gitInit(inner);
+    write(join(inner, '.gitignore'), 'cdk.out/\n');
+    write(join(inner, 'CLAUDE.md'), 'INNER_RULE');
+    write(join(inner, 'cdk.out', 'asset', 'CLAUDE.md'), 'INNER_COPY');
+    const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({ workspaces: [{ directory: r, isPrimary: true }] }) };
+    return { r, args: { workspace: ws, env, strategy: { nativeRuleFiles: ['AGENTS.md'] } } };
+  }
+
+  it('git\'s own answers decide, the same as the walk alone, and a folder git ignores is never listed', async () => {
+    const { r, args } = ignoringRepository();
+    const alone = repositoryRulesParts(args);
+    calls.listedAhead = [];
+    const ahead = await repositoryRulesPartsAsync(args);
+    expect(ahead).toEqual(alone);
+    const text = ahead.map((p) => p.text).join('\n');
+    expect(text).toContain(join(r, 'notes', 'AGENTS.md'));
+    expect(text).toContain(join(r, 'kept-out', 'AGENTS.md'));
+    expect(text).toContain(join(r, 'a b', 'ü', 'CLAUDE.md'));
+    expect(text).toContain(join(r, 'dist', 'AGENTS.md'));
+    for (const dropped of ['IGNORED_COPY', 'IGNORED_NOTE', 'IGNORED_FILE', 'INNER_COPY']) expect(text).not.toContain(dropped);
+    expect(text).not.toContain(join(r, 'local', 'AGENTS.md'));
+    // Below an ignored folder nothing is read: its own listing (does it hold
+    // `.git`?) is the only one.
+    for (const ignored of [join(r, 'generated'), join(r, 'notes', 'drafts'), join(r, 'packages', 'inner', 'cdk.out')]) {
+      expect(calls.listedAhead.filter((d) => d.startsWith(ignored + sep))).toEqual([]);
+    }
+  });
+
+  it('git is asked on one open process per repository, however many levels, and the walk never waits on git', async () => {
+    const { args } = ignoringRepository();
+    const ahead = await repositoryRulesPartsAsync(args);
+    expect(ahead.length).toBeGreaterThan(0);
+    expect(calls.gitWaited).toBe(0);
+    expect(calls.gitAhead).toBe(2); // repo, packages/inner
+  });
+
+  it('a git that cannot answer here leaves the questions to the collection: the same parts', async () => {
+    const { args } = ignoringRepository();
+    const alone = repositoryRulesParts(args);
+    calls.gitWaited = 0;
+    calls.breakAhead = true;
+    const ahead = await repositoryRulesPartsAsync(args);
+    expect(ahead).toEqual(alone);
+    expect(calls.gitWaited).toBeGreaterThan(0);
   });
 });
