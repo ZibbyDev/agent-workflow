@@ -6,6 +6,9 @@
  * strategy received a system prompt, so the first two cases fail there.
  */
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { registerStrategy, invokeAgent } from '../strategy-registry.js';
 import { registerSkill } from '../skill-registry.js';
 import { STANDING_PROMPT, placeStandingPrompt } from '../standing-prompt.js';
@@ -52,5 +55,29 @@ describe('a node\'s standing text', () => {
   it('blank standing text is no standing text', () => {
     const r = placeStandingPrompt({ takesSystemPrompt: true }, [{ key: 's', text: '  ' }], [{ key: 'p', text: 'x' }]);
     expect(r).toEqual({ prompt: 'x', promptParts: [{ key: 'p', text: 'x' }], systemPrompt: '', systemPromptParts: [] });
+  });
+
+  // run_log/magnum/2026-10-30-pm-chat-turn-heavy: the rule files are the same on every call, but sat after the
+  // per-run project folders in the call's text, so a provider could never cache them (~36k characters a chat turn).
+  // A/B: before, the rules were in the call's text in both cases — the first case fails there.
+  it('the repository\'s rule files join the standing text, after the skill pages; without standing text, the call\'s text as before', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'standing-rules-'));
+    try {
+      mkdirSync(join(base, '.git'), { recursive: true });
+      writeFileSync(join(base, 'CLAUDE.md'), 'RULE-FILE-MARKER');
+      const withStanding = capture('standing-rules-sys', true);
+      await invokeAgent('the call', { state: { agentType: 'standing-rules-sys' } },
+        { model: 'm', skills: ['standing-probe'], workspace: base, [STANDING_PROMPT]: 'who you are' } as any);
+      expect(withStanding.opts.systemPrompt.startsWith('who you are\n\n## Probe page')).toBe(true);
+      expect(withStanding.opts.systemPrompt).toContain('RULE-FILE-MARKER');
+      expect(withStanding.prompt).not.toContain('RULE-FILE-MARKER');
+      expect(withStanding.opts.systemPromptParts.map((p: any) => p.text).join('')).toBe(withStanding.opts.systemPrompt);
+
+      const without = capture('standing-rules-none', true);
+      await invokeAgent('the call', { state: { agentType: 'standing-rules-none' } }, { model: 'm', skills: ['standing-probe'], workspace: base } as any);
+      expect(without.opts.systemPrompt).toBeUndefined();
+      expect(without.prompt.startsWith('the call\n\n## Probe page')).toBe(true);
+      expect(without.prompt).toContain('RULE-FILE-MARKER');
+    } finally { rmSync(base, { recursive: true, force: true }); }
   });
 });

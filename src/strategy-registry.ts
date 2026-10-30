@@ -584,8 +584,14 @@ export async function invokeAgent(prompt, context: any = {}, options: any = {}) 
   // Placed before the operator's override block, which stays last and wins.
   // One function for both invokeAgent paths (repository-rules.ts).
   // Its folders are read ahead in parallel (repositoryRulesPartsAsync); the parts are repositoryRulesParts' own.
+  // A node that hands over standing text gets them WITH it (after the skill
+  // pages): the rule files are the same on every call, and in front of the
+  // per-run project folders above they are part of the prefix a provider
+  // caches (run_log/magnum/2026-10-30-pm-chat-turn-heavy: ~36k characters of
+  // rule files re-sent uncached on every chat turn). Without standing text:
+  // here in the prompt, exactly as before.
   for (const p of await repositoryRulesPartsAsync({ workspace: finalOptions.workspace, strategy, repositoryRoots: options.repositoryRoots })) {
-    add(p.key, `\n\n${p.text}`);
+    addStandingOrPrompt(p.key, `\n\n${p.text}`);
   }
 
   // WHEN THIS RUN IS STOPPED — one sentence, every model node, every vendor
