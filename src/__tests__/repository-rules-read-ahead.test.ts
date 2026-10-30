@@ -228,3 +228,65 @@ describe('rule-file walk read ahead', () => {
     expect(calls.gitWaited).toBeGreaterThan(0);
   });
 });
+
+describe('the run\'s live view is not a rule source', () => {
+  // Every run with a local folder also sees that folder as it is on disk now,
+  // under local-project/live — the same repositories again, at the person's
+  // current state. Taken as checkouts of the run, every rule file reached the
+  // prompt twice (2026-10-30: live/CLAUDE.md and live/AGENTS.md beside the
+  // work copy's own). The run works in its prepared copies, and its rules come
+  // from there.
+  function liveLayout({ inPlace = false } = {}) {
+    const ws = join(base, 'workspace');
+    const local = join(ws, 'local-project');
+    const tree = join(local, 'tree', 'app');
+    const live = join(local, 'live');
+    gitInit(tree);
+    write(join(tree, 'CLAUDE.md'), 'WORK_COPY_RULE');
+    write(join(tree, 'api', 'AGENTS.md'), 'WORK_COPY_SUBFOLDER_RULE');
+    gitInit(live);
+    write(join(live, 'CLAUDE.md'), 'LIVE_PARENT_RULE');
+    write(join(live, 'AGENTS.md'), 'LIVE_PARENT_AGENTS');
+    gitInit(join(live, 'app'));
+    write(join(live, 'app', 'CLAUDE.md'), 'LIVE_COPY_RULE');
+    write(join(live, 'app', '.claude', 'skills', 'deploy', 'SKILL.md'), '---\ndescription: LIVE_SKILL\n---\n');
+    // A plain folder the run works in place: its directory IS its live directory.
+    const notes = join(local, 'tree', 'notes');
+    write(join(notes, 'AGENTS.md'), 'IN_PLACE_RULE');
+    const env = { LOCAL_PROJECT_CONTEXT: JSON.stringify({
+      workspaces: [
+        { directory: tree, originalPath: '/home/p/app', isPrimary: true, liveDirectory: join(live, 'app') },
+        { directory: notes, originalPath: '/home/p/notes', inPlace: true, ...(inPlace ? { liveDirectory: notes } : {}) },
+      ],
+      liveViews: [{ folderPath: '/home/p', directory: live, access: 'editable' }],
+    }) };
+    return { live, tree, notes, args: { workspace: ws, env, strategy: { nativeRuleFiles: [] } } };
+  }
+
+  it('the rules come from the work copies, never from the live view — both ways of reading', async () => {
+    const { live, tree, notes, args } = liveLayout();
+    for (const parts of [repositoryRulesParts(args), await repositoryRulesPartsAsync(args)]) {
+      const text = parts.map((p) => p.text).join('\n');
+      expect(text).toContain('WORK_COPY_RULE');
+      expect(text).toContain(join(tree, 'api', 'AGENTS.md'));
+      expect(text).toContain(join(notes, 'AGENTS.md')); // another folder's own rules: on the index
+      expect(text).not.toContain(live + sep);
+      for (const fromLive of ['LIVE_PARENT_RULE', 'LIVE_PARENT_AGENTS', 'LIVE_COPY_RULE', 'LIVE_SKILL']) expect(text).not.toContain(fromLive);
+    }
+    expect(await repositoryRulesPartsAsync(args)).toEqual(repositoryRulesParts(args));
+  });
+
+  it('nothing under the live view is listed to find checkouts', async () => {
+    const { live, args } = liveLayout();
+    calls.listedAhead = [];
+    await repositoryRulesPartsAsync(args);
+    expect(calls.listedAhead.filter((d) => d === live || d.startsWith(live + sep))).toEqual([]);
+  });
+
+  it('a folder used in place, whose live directory is the folder itself, keeps its rules', async () => {
+    const { notes, args } = liveLayout({ inPlace: true });
+    const text = (await repositoryRulesPartsAsync(args)).map((p) => p.text).join('\n');
+    expect(text).toContain(join(notes, 'AGENTS.md'));
+    expect(text).toContain('WORK_COPY_RULE');
+  });
+});

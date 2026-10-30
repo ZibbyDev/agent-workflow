@@ -787,12 +787,12 @@ async function runStepsAhead<T>(steps: Steps<T>, fetch: (need: Need) => Promise<
  * repository. Without it (the checkout discovery walk) only the fixed skips
  * apply.
  */
-type WalkOptions = { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker; listings?: ListingCache | null };
+type WalkOptions = { includeCheckoutCache?: boolean; honourIgnore?: boolean; repository?: string | null; ask?: IgnoreAsker; listings?: ListingCache | null; skip?: (dir: string) => boolean };
 function walkSubfolders(top: string, opts: WalkOptions = {}): WalkedDir[] {
   return runSteps(walkSubfolderSteps(top, opts));
 }
 
-function* walkSubfolderSteps(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker(), listings = null }: WalkOptions = {}): Steps<WalkedDir[]> {
+function* walkSubfolderSteps(top: string, { includeCheckoutCache = false, honourIgnore = false, repository = null, ask = ignoreAsker(), listings = null, skip }: WalkOptions = {}): Steps<WalkedDir[]> {
   const out: WalkedDir[] = [];
   let level: WalkedDir[] = [{ dir: top, repo: honourIgnore ? repository : null }];
   let scanned = 0;
@@ -830,7 +830,10 @@ function* walkSubfolderSteps(top: string, { includeCheckoutCache = false, honour
           }
           continue;
         }
-        found.push({ dir: join(dir, e.name), repo, name: e.name, ownRepo: false, cache: false });
+        const child = join(dir, e.name);
+        // A folder the caller keeps out (the run's live view, for checkout discovery) is neither walked nor found.
+        if (skip && skip(child)) continue;
+        found.push({ dir: child, repo, name: e.name, ownRepo: false, cache: false });
       }
     }
     if (honourIgnore) {
@@ -873,11 +876,34 @@ function* walkSubfolderSteps(top: string, { includeCheckoutCache = false, honour
 }
 
 /** Subfolders under `top` for checkout discovery (fixed skips only). */
-function subfolders(top: string, includeCheckoutCache = false, listings: ListingCache | null = null): string[] {
+function subfolders(top: string, includeCheckoutCache = false, listings: ListingCache | null = null, skip?: (dir: string) => boolean): string[] {
   // A listing is read only for a real directory; a top that is a symlink is
   // read through it, as the walk without listings always did.
   const read = listings && isRealDir(top) ? listings : null;
-  return walkSubfolders(top, { includeCheckoutCache, listings: read }).map((w) => w.dir);
+  return walkSubfolders(top, { includeCheckoutCache, listings: read, skip }).map((w) => w.dir);
+}
+
+/**
+ * THE RUN'S LIVE VIEW — where the person's folders are shown as they are on
+ * disk now, beside the folders the run works in, as the runner's manifest
+ * records them (LOCAL_PROJECT_CONTEXT: `liveViews[].directory`, each folder's
+ * `liveDirectory`). Absolute paths only; [] when there is none.
+ *
+ * The live view is for READING the person's files as they are; the run works
+ * in its own folders (the prepared copies, or a plain folder used in place),
+ * and those are where its rule files come from. A live view holds the same
+ * repositories again — at the person's current state — so taken as checkouts
+ * it put every rule file into the prompt twice (CLAUDE.md, AGENTS.md, …) and
+ * doubled the folders walked before every first model call.
+ */
+export function liveViewFolders(env: Record<string, string | undefined> = process.env): string[] {
+  let ctx: any;
+  try { ctx = JSON.parse(env?.LOCAL_PROJECT_CONTEXT || '{}'); } catch { return []; }
+  if (!ctx || typeof ctx !== 'object') return [];
+  const abs = (p: unknown): p is string => typeof p === 'string' && !!p && isAbsolute(p) && normalize(p) === p;
+  const views = Array.isArray(ctx.liveViews) ? ctx.liveViews.map((v: any) => v?.directory) : [];
+  const own = Array.isArray(ctx.workspaces) ? ctx.workspaces.map((w: any) => w?.liveDirectory) : [];
+  return [...new Set([...views, ...own].filter(abs))];
 }
 
 /** One project folder the runner prepared for this run, as its manifest says. */
@@ -1409,7 +1435,7 @@ export async function repositoryRulesPartsAsync(args: RulesArgs = {}): Promise<P
   const listings: ListingCache = new Map();
   const list = listingReader(listings);
   // The working directory's folders, for the checkout discovery walk (ruleRoots).
-  try { await prefetchListings([rulesInputs(args).cwd], listings, list); } catch { /* the walk reads every folder itself */ }
+  try { await prefetchListings([rulesInputs(args).cwd], listings, list, inLiveView(liveViewFolders(args.env || process.env))); } catch { /* the walk reads every folder itself */ }
   // The run's startup timeline (startup-marks.ts): the first model call waited
   // 3.7-7.3 s for its rule files on a loaded box (2026-10-28); these marks say
   // which part.
@@ -1486,13 +1512,15 @@ function listingReader(listings: ListingCache): (dir: string, real?: boolean) =>
  * project tree still listed ~800 folders one at a time behind it (0.8 s in a
  * run container, 2026-10-29).
  */
-async function prefetchListings(tops: string[], listings: ListingCache, list: (dir: string) => Promise<void> = listingReader(listings)): Promise<void> {
+async function prefetchListings(tops: string[], listings: ListingCache, list: (dir: string) => Promise<void> = listingReader(listings),
+  skip?: (dir: string) => boolean): Promise<void> {
   const sortedChildren = (dir: string): string[] => {
     const listing = listings.get(dir);
     if (!listing) return [];
     return [...listing.values()]
       .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith('.') && !DEPENDENCY_DIRS.has(e.name))
-      .map((e) => e.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((name) => join(dir, name));
+      .map((e) => e.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((name) => join(dir, name))
+      .filter((d) => !skip || !skip(d));
   };
   const walkFrom = async (top: string): Promise<void> => {
     await list(top);
@@ -1546,9 +1574,18 @@ function ruleRoots(args: RulesArgs, listings: ListingCache): RuleRoot[] {
     // A clone tool may have created this checkout in an earlier node. Every
     // invocation discovers those repositories from the same bounded,
     // symlink-free workspace walk, without template-specific plumbing.
-    ...subfolders(cwd, true, listings).filter((dir) => gitEntryExists(dir, listings) && !inPrepared(dir))
+    // The run's live view is not where it works: its repositories are not
+    // checkouts of this run (liveViewFolders).
+    ...subfolders(cwd, true, listings, inLiveView(liveViewFolders(env))).filter((dir) => gitEntryExists(dir, listings) && !inPrepared(dir))
       .map((dir) => ({ dir, declared: true })),
   ];
+}
+
+/** Whether a folder is one of `live` or inside one (compared as resolved paths). */
+function inLiveView(live: string[]): ((dir: string) => boolean) | undefined {
+  if (!live.length) return undefined;
+  const tops = live.map((d) => resolve(d));
+  return (dir: string) => { const d = resolve(dir); return tops.some((t) => d === t || d.startsWith(t + sep)); };
 }
 
 /** The parts for the rule files collected from `roots`. */
